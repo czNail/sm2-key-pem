@@ -1,0 +1,284 @@
+#!/usr/bin/env python3
+"""Convert raw SM2 public/private keys from hex or base64 to PEM."""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import binascii
+import re
+import sys
+from pathlib import Path
+
+try:
+    from asn1crypto import keys
+except ImportError as exc:  # pragma: no cover - depends on local environment
+    raise SystemExit(
+        "Missing dependency: asn1crypto\n"
+        "Install it with: pip install -r requirements.txt"
+    ) from exc
+
+
+SM2_OID = "1.2.156.10197.1.301"
+SM2_CURVE_NAME = "sm2p256v1"
+PRIVATE_KEY_BYTES = 32
+PUBLIC_KEY_BYTES = 65
+RAW_PUBLIC_KEY_BYTES = 64
+
+
+def register_sm2_curve() -> None:
+    keys.NamedCurve.register(SM2_CURVE_NAME, SM2_OID, PRIVATE_KEY_BYTES)
+
+
+def clean_hex(value: str) -> str:
+    cleaned = re.sub(r"[\s:_-]", "", value.strip())
+    if cleaned.startswith(("0x", "0X")):
+        cleaned = cleaned[2:]
+    return cleaned
+
+
+def decode_hex(value: str, label: str) -> bytes:
+    cleaned = clean_hex(value)
+    if not cleaned:
+        raise ValueError(f"{label} is empty")
+    if len(cleaned) % 2:
+        raise ValueError(f"{label} hex length must be even")
+    if not re.fullmatch(r"[0-9a-fA-F]+", cleaned):
+        raise ValueError(f"{label} contains non-hex characters")
+    return bytes.fromhex(cleaned)
+
+
+def decode_base64(value: str, label: str) -> bytes:
+    cleaned = re.sub(r"\s+", "", value.strip())
+    if not cleaned:
+        raise ValueError(f"{label} is empty")
+    try:
+        return base64.b64decode(cleaned, validate=True)
+    except binascii.Error as exc:
+        raise ValueError(f"{label} is not valid base64") from exc
+
+
+def decode_raw_key(
+    value: str,
+    label: str,
+    expected_lengths: tuple[int, ...],
+    input_format: str,
+) -> bytes:
+    decoders = {
+        "hex": decode_hex,
+        "base64": decode_base64,
+    }
+
+    if input_format != "auto":
+        decoded = decoders[input_format](value, label)
+        validate_length(decoded, label, expected_lengths)
+        return decoded
+
+    errors: list[str] = []
+    for name in ("hex", "base64"):
+        try:
+            decoded = decoders[name](value, label)
+            validate_length(decoded, label, expected_lengths)
+            return decoded
+        except ValueError as exc:
+            errors.append(f"{name}: {exc}")
+
+    expected = " or ".join(f"{length} bytes" for length in expected_lengths)
+    raise ValueError(
+        f"{label} must be hex or base64 encoded raw key bytes ({expected}). "
+        + "; ".join(errors)
+    )
+
+
+def validate_length(value: bytes, label: str, expected_lengths: tuple[int, ...]) -> None:
+    if len(value) not in expected_lengths:
+        expected = " or ".join(str(length) for length in expected_lengths)
+        raise ValueError(f"{label} must be {expected} bytes, got {len(value)} bytes")
+
+
+def parse_private_key(value: str, input_format: str) -> bytes:
+    return decode_raw_key(value, "private key", (PRIVATE_KEY_BYTES,), input_format)
+
+
+def parse_public_key(value: str, input_format: str) -> bytes:
+    public_key = decode_raw_key(
+        value,
+        "public key",
+        (PUBLIC_KEY_BYTES, RAW_PUBLIC_KEY_BYTES),
+        input_format,
+    )
+    if len(public_key) == RAW_PUBLIC_KEY_BYTES:
+        public_key = b"\x04" + public_key
+    if public_key[0] != 0x04:
+        raise ValueError("public key must be an uncompressed EC point starting with 04")
+    return public_key
+
+
+def der_to_pem(der: bytes, label: str) -> str:
+    body = base64.encodebytes(der).decode("ascii")
+    return f"-----BEGIN {label}-----\n{body}-----END {label}-----\n"
+
+
+def sm2_parameters() -> keys.ECDomainParameters:
+    return keys.ECDomainParameters(name="named", value=SM2_OID)
+
+
+def build_ec_private_key(
+    private_key: bytes,
+    public_key: bytes | None = None,
+) -> keys.ECPrivateKey:
+    register_sm2_curve()
+    key_data = {
+        "version": "ecPrivkeyVer1",
+        "private_key": int.from_bytes(private_key, "big"),
+        "parameters": sm2_parameters(),
+    }
+    if public_key is not None:
+        key_data["public_key"] = public_key
+    return keys.ECPrivateKey(key_data)
+
+
+def private_key_to_sec1_pem(
+    private_key: bytes,
+    public_key: bytes | None = None,
+) -> str:
+    return der_to_pem(build_ec_private_key(private_key, public_key).dump(), "EC PRIVATE KEY")
+
+
+def private_key_to_pkcs8_pem(
+    private_key: bytes,
+    public_key: bytes | None = None,
+) -> str:
+    private_info = keys.PrivateKeyInfo(
+        {
+            "version": 0,
+            "private_key_algorithm": {
+                "algorithm": "ec",
+                "parameters": sm2_parameters(),
+            },
+            "private_key": build_ec_private_key(private_key, public_key),
+        }
+    )
+    return der_to_pem(private_info.dump(), "PRIVATE KEY")
+
+
+def public_key_to_pem(public_key: bytes) -> str:
+    pki = keys.PublicKeyInfo(
+        {
+            "algorithm": {
+                "algorithm": "ec",
+                "parameters": sm2_parameters(),
+            },
+            "public_key": public_key,
+        }
+    )
+    return der_to_pem(pki.dump(), "PUBLIC KEY")
+
+
+def write_text(path: Path, text: str) -> None:
+    path.write_text(text, encoding="ascii")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="sm2-key-pem",
+        description="Convert raw SM2 public/private keys from hex or base64 to PEM.",
+    )
+    parser.add_argument("--private-key", "--priv", help="Raw SM2 private key.")
+    parser.add_argument("--public-key", "--pub", help="Raw SM2 public key.")
+    parser.add_argument(
+        "--private-input-format",
+        choices=("auto", "hex", "base64"),
+        default="auto",
+        help="Private key input encoding. Default: auto",
+    )
+    parser.add_argument(
+        "--public-input-format",
+        choices=("auto", "hex", "base64"),
+        default="auto",
+        help="Public key input encoding. Default: auto",
+    )
+    parser.add_argument(
+        "--private-pem-format",
+        choices=("pkcs8", "sec1", "both"),
+        default="pkcs8",
+        help="Private key PEM format. Default: pkcs8",
+    )
+    parser.add_argument(
+        "--private-out",
+        default="sm2.key.pem",
+        help="Output path for the private key PEM. Default: sm2.key.pem",
+    )
+    parser.add_argument(
+        "--sec1-private-out",
+        default="sm2.ec.key.pem",
+        help="Output path for SEC1 private key PEM when --private-pem-format=both. "
+        "Default: sm2.ec.key.pem",
+    )
+    parser.add_argument(
+        "--public-out",
+        default="sm2.pub.pem",
+        help="Output path for PUBLIC KEY PEM. Default: sm2.pub.pem",
+    )
+    parser.add_argument(
+        "--print",
+        action="store_true",
+        help="Print generated PEM content to stdout.",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if not args.private_key and not args.public_key:
+        parser.error("provide --private-key, --public-key, or both")
+
+    try:
+        private_key = (
+            parse_private_key(args.private_key, args.private_input_format)
+            if args.private_key
+            else None
+        )
+        public_key = (
+            parse_public_key(args.public_key, args.public_input_format)
+            if args.public_key
+            else None
+        )
+    except ValueError as exc:
+        parser.exit(2, f"sm2-key-pem: error: {exc}\n")
+
+    generated: list[tuple[Path, str]] = []
+
+    if private_key is not None:
+        if args.private_pem_format in ("pkcs8", "both"):
+            generated.append(
+                (Path(args.private_out), private_key_to_pkcs8_pem(private_key, public_key))
+            )
+        if args.private_pem_format == "sec1":
+            generated.append(
+                (Path(args.private_out), private_key_to_sec1_pem(private_key, public_key))
+            )
+        if args.private_pem_format == "both":
+            generated.append(
+                (
+                    Path(args.sec1_private_out),
+                    private_key_to_sec1_pem(private_key, public_key),
+                )
+            )
+
+    if public_key is not None:
+        generated.append((Path(args.public_out), public_key_to_pem(public_key)))
+
+    for path, pem in generated:
+        write_text(path, pem)
+        print(f"wrote {path}")
+        if args.print:
+            print(pem, end="" if pem.endswith("\n") else "\n")
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
