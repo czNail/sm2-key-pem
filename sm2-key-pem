@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert raw SM2 public/private keys from hex or base64 to PEM."""
+"""Generate SM2 keys or convert raw SM2 keys from hex/base64 to PEM."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import argparse
 import base64
 import binascii
 import re
+import secrets
 import sys
 from pathlib import Path
 
@@ -24,6 +25,35 @@ SM2_CURVE_NAME = "sm2p256v1"
 PRIVATE_KEY_BYTES = 32
 PUBLIC_KEY_BYTES = 65
 RAW_PUBLIC_KEY_BYTES = 64
+SM2_P = int(
+    "FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF00000000FFFFFFFFFFFFFFFF",
+    16,
+)
+SM2_A = int(
+    "FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF00000000FFFFFFFFFFFFFFFC",
+    16,
+)
+SM2_B = int(
+    "28E9FA9E9D9F5E344D5A9E4BCF6509A7"
+    "F39789F515AB8F92DDBCBD414D940E93",
+    16,
+)
+SM2_N = int(
+    "FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFF7203DF6B21C6052B53BBF40939D54123",
+    16,
+)
+SM2_GX = int(
+    "32C4AE2C1F1981195F9904466A39C994"
+    "8FE30BBFF2660BE1715A4589334C74C7",
+    16,
+)
+SM2_GY = int(
+    "BC3736A2F4F6779C59BDCEE36B692153"
+    "D0A9877CC62A474002DF32E52139F0A0",
+    16,
+)
+SM2_G = (SM2_GX, SM2_GY)
+Point = tuple[int, int] | None
 
 
 def register_sm2_curve() -> None:
@@ -97,7 +127,11 @@ def validate_length(value: bytes, label: str, expected_lengths: tuple[int, ...])
 
 
 def parse_private_key(value: str, input_format: str) -> bytes:
-    return decode_raw_key(value, "private key", (PRIVATE_KEY_BYTES,), input_format)
+    private_key = decode_raw_key(value, "private key", (PRIVATE_KEY_BYTES,), input_format)
+    private_value = int.from_bytes(private_key, "big")
+    if not 1 <= private_value < SM2_N:
+        raise ValueError("private key must be in the range [1, n - 1]")
+    return private_key
 
 
 def parse_public_key(value: str, input_format: str) -> bytes:
@@ -111,7 +145,86 @@ def parse_public_key(value: str, input_format: str) -> bytes:
         public_key = b"\x04" + public_key
     if public_key[0] != 0x04:
         raise ValueError("public key must be an uncompressed EC point starting with 04")
+    if not is_public_key_on_curve(public_key):
+        raise ValueError("public key point is not on the SM2 curve")
     return public_key
+
+
+def encode_public_key(point: tuple[int, int]) -> bytes:
+    x, y = point
+    return b"\x04" + x.to_bytes(PRIVATE_KEY_BYTES, "big") + y.to_bytes(
+        PRIVATE_KEY_BYTES,
+        "big",
+    )
+
+
+def decode_public_key_point(public_key: bytes) -> tuple[int, int]:
+    x = int.from_bytes(public_key[1:33], "big")
+    y = int.from_bytes(public_key[33:65], "big")
+    return x, y
+
+
+def is_point_on_curve(point: tuple[int, int]) -> bool:
+    x, y = point
+    if not 0 <= x < SM2_P or not 0 <= y < SM2_P:
+        return False
+    return (y * y - (x * x * x + SM2_A * x + SM2_B)) % SM2_P == 0
+
+
+def is_public_key_on_curve(public_key: bytes) -> bool:
+    return is_point_on_curve(decode_public_key_point(public_key))
+
+
+def point_add(left: Point, right: Point) -> Point:
+    if left is None:
+        return right
+    if right is None:
+        return left
+
+    x1, y1 = left
+    x2, y2 = right
+
+    if x1 == x2 and (y1 + y2) % SM2_P == 0:
+        return None
+
+    if left == right:
+        if y1 == 0:
+            return None
+        slope = ((3 * x1 * x1 + SM2_A) * pow(2 * y1, -1, SM2_P)) % SM2_P
+    else:
+        slope = ((y2 - y1) * pow(x2 - x1, -1, SM2_P)) % SM2_P
+
+    x3 = (slope * slope - x1 - x2) % SM2_P
+    y3 = (slope * (x1 - x3) - y1) % SM2_P
+    return x3, y3
+
+
+def scalar_multiply(scalar: int, point: tuple[int, int]) -> Point:
+    result: Point = None
+    addend: Point = point
+
+    while scalar:
+        if scalar & 1:
+            result = point_add(result, addend)
+        addend = point_add(addend, addend)
+        scalar >>= 1
+
+    return result
+
+
+def generate_sm2_key_pair() -> tuple[bytes, bytes]:
+    private_value = secrets.randbelow(SM2_N - 1) + 1
+    public_point = scalar_multiply(private_value, SM2_G)
+    if public_point is None:
+        raise RuntimeError("failed to generate public key point")
+    return private_value.to_bytes(PRIVATE_KEY_BYTES, "big"), encode_public_key(public_point)
+
+
+def validate_key_pair(private_key: bytes, public_key: bytes) -> None:
+    private_value = int.from_bytes(private_key, "big")
+    public_point = scalar_multiply(private_value, SM2_G)
+    if public_point is None or encode_public_key(public_point) != public_key:
+        raise ValueError("private key and public key do not match")
 
 
 def der_to_pem(der: bytes, label: str) -> str:
@@ -182,7 +295,12 @@ def write_text(path: Path, text: str) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="sm2-key-pem",
-        description="Convert raw SM2 public/private keys from hex or base64 to PEM.",
+        description="Generate SM2 keys or convert raw SM2 keys from hex/base64 to PEM.",
+    )
+    parser.add_argument(
+        "--generate",
+        action="store_true",
+        help="Generate a random SM2 key pair without calling OpenSSL.",
     )
     parser.add_argument("--private-key", "--priv", help="Raw SM2 private key.")
     parser.add_argument("--public-key", "--pub", help="Raw SM2 public key.")
@@ -225,6 +343,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print generated PEM content to stdout.",
     )
+    parser.add_argument(
+        "--print-raw",
+        action="store_true",
+        help="Print raw key hex/base64 values to stdout. This may reveal private keys.",
+    )
     return parser
 
 
@@ -232,20 +355,27 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    if not args.private_key and not args.public_key:
+    if args.generate and (args.private_key or args.public_key):
+        parser.error("--generate cannot be combined with --private-key or --public-key")
+    if not args.generate and not args.private_key and not args.public_key:
         parser.error("provide --private-key, --public-key, or both")
 
     try:
-        private_key = (
-            parse_private_key(args.private_key, args.private_input_format)
-            if args.private_key
-            else None
-        )
-        public_key = (
-            parse_public_key(args.public_key, args.public_input_format)
-            if args.public_key
-            else None
-        )
+        if args.generate:
+            private_key, public_key = generate_sm2_key_pair()
+        else:
+            private_key = (
+                parse_private_key(args.private_key, args.private_input_format)
+                if args.private_key
+                else None
+            )
+            public_key = (
+                parse_public_key(args.public_key, args.public_input_format)
+                if args.public_key
+                else None
+            )
+            if private_key is not None and public_key is not None:
+                validate_key_pair(private_key, public_key)
     except ValueError as exc:
         parser.exit(2, f"sm2-key-pem: error: {exc}\n")
 
@@ -276,6 +406,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"wrote {path}")
         if args.print:
             print(pem, end="" if pem.endswith("\n") else "\n")
+
+    if args.print_raw:
+        if private_key is not None:
+            print(f"private_key_hex={private_key.hex()}")
+            print(f"private_key_base64={base64.b64encode(private_key).decode('ascii')}")
+        if public_key is not None:
+            print(f"public_key_hex={public_key.hex()}")
+            print(f"public_key_base64={base64.b64encode(public_key).decode('ascii')}")
 
     return 0
 
