@@ -148,6 +148,25 @@ When `both` is used:
   --print
 ```
 
+## Tests
+
+Install development dependencies:
+
+```bash
+pip install -r requirements-dev.txt
+```
+
+Run the regression tests:
+
+```bash
+pytest -q
+```
+
+The OpenSSL regression test generates a random SM2 key pair, encrypts data with
+the generated public key, and decrypts it with the generated private key using
+`openssl pkeyutl`. The test is skipped automatically when OpenSSL is missing or
+does not expose SM2 support.
+
 ## Security Note
 
 Do not commit real private keys. Generated `*.pem` and `*.key` files are ignored

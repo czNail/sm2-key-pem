@@ -145,6 +145,24 @@ pip install -r requirements.txt
   --print
 ```
 
+## 测试
+
+安装开发依赖：
+
+```bash
+pip install -r requirements-dev.txt
+```
+
+运行回归测试：
+
+```bash
+pytest -q
+```
+
+OpenSSL 回归测试会随机生成一对 SM2 密钥，用生成的公钥通过
+`openssl pkeyutl` 加密数据，再用生成的私钥解密并比对明文。如果当前环境没有
+OpenSSL，或者 OpenSSL 不暴露 SM2 支持，该测试会自动跳过。
+
 ## 安全提醒
 
 不要提交真实私钥。仓库的 `.gitignore` 已经忽略生成的 `*.pem` 和 `*.key` 文件。
