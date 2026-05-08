@@ -1,12 +1,12 @@
 # sm2-key-pem
 
-生成随机 SM2 密钥对，或将 SM2 裸公钥、裸私钥从 hex/base64 转换成
-PEM 文件；不要求本机安装高版本 OpenSSL。
+面向 SM2 的命令行工具箱，支持密钥生成、PEM 封装、密钥格式转换和 SM2
+加解密。内置 SM2 能力不要求本机安装高版本 OpenSSL。
 
 [English README](README.md)
 
-这个工具适合在本地生成 SM2 密钥对，也适合处理在线 SM2 工具生成的原始密钥，
-例如：
+这个工具适合在本地生成 SM2 密钥对、执行 SM2 加解密，也适合处理在线 SM2
+工具生成的原始密钥，例如：
 
 - 公钥：base64 或 hex 编码的 `04 + x + y`
 - 私钥：base64 或 hex 编码的 32 字节私钥标量
@@ -19,6 +19,23 @@ PEM 文件；不要求本机安装高版本 OpenSSL。
 
 内置 SM2 曲线参数来自
 [RFC 8998 curveSM2](https://www.rfc-editor.org/rfc/rfc8998#section-3.2)。
+
+## 产品范围
+
+当前版本：
+
+- SM2 密钥对生成
+- SM2 裸 key 转 PEM
+- SM2 PKCS#8 和 SEC1 私钥 PEM 输出
+- SM2 公钥 PEM 输出
+- SM2 加解密
+- 默认输出 OpenSSL 兼容 SM2 密文
+
+后续规划：
+
+- SM3 摘要命令
+- SM4 加解密命令
+- 更多安装方式，例如 `pipx` 和 PyPI
 
 ## 安装依赖
 
@@ -145,6 +162,51 @@ pip install -r requirements.txt
   --print
 ```
 
+## 加密和解密
+
+生成一对密钥：
+
+```bash
+./sm2-key-pem --generate
+```
+
+使用公钥 PEM 加密：
+
+```bash
+./sm2-key-pem \
+  --encrypt \
+  --public-key-pem sm2.pub.pem \
+  --in plain.txt \
+  --out cipher.der
+```
+
+使用私钥 PEM 解密：
+
+```bash
+./sm2-key-pem \
+  --decrypt \
+  --private-key-pem sm2.key.pem \
+  --in cipher.der \
+  --out decrypted.txt
+```
+
+默认密文格式是 `openssl-der`，兼容 `openssl pkeyutl`。也可以输出常见裸密文格式：
+
+```bash
+./sm2-key-pem \
+  --encrypt \
+  --public-key-pem sm2.pub.pem \
+  --in plain.txt \
+  --out cipher.bin \
+  --ciphertext-format c1c3c2
+```
+
+支持的密文格式：
+
+- `openssl-der`：OpenSSL 兼容 ASN.1 DER，默认格式
+- `c1c3c2`：裸格式 `04+x+y || C3 || C2`
+- `c1c2c3`：裸格式 `04+x+y || C2 || C3`
+
 ## 测试
 
 安装开发依赖：
@@ -159,10 +221,12 @@ pip install -r requirements-dev.txt
 pytest -q
 ```
 
-OpenSSL 回归测试会随机生成一对 SM2 密钥，用生成的公钥通过
-`openssl pkeyutl` 加密数据，再用生成的私钥解密并比对明文。如果当前环境没有
-OpenSSL，或者 OpenSSL 不暴露 SM2 支持，该测试会自动跳过。
+测试覆盖内置 SM2 加解密和 OpenSSL 互操作。如果当前环境没有 OpenSSL，或者
+OpenSSL 不暴露 SM2 支持，OpenSSL 相关回归测试会自动跳过。
 
 ## 安全提醒
 
 不要提交真实私钥。仓库的 `.gitignore` 已经忽略生成的 `*.pem` 和 `*.key` 文件。
+
+内置 Python SM2 实现主要面向工具化和互操作场景。高安全生产系统应优先使用经过
+审计的密码库，或使用硬件/系统级密钥保护能力。

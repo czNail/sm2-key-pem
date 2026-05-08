@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate SM2 keys or convert raw SM2 keys from hex/base64 to PEM."""
+"""Generate/convert SM2 keys and encrypt/decrypt SM2 ciphertext."""
 
 from __future__ import annotations
 
@@ -12,7 +12,8 @@ import sys
 from pathlib import Path
 
 try:
-    from asn1crypto import keys
+    from asn1crypto import keys, pem
+    from asn1crypto.core import Integer, OctetString, Sequence
 except ImportError as exc:  # pragma: no cover - depends on local environment
     raise SystemExit(
         "Missing dependency: asn1crypto\n"
@@ -54,6 +55,27 @@ SM2_GY = int(
 )
 SM2_G = (SM2_GX, SM2_GY)
 Point = tuple[int, int] | None
+SM3_IV = (
+    0x7380166F,
+    0x4914B2B9,
+    0x172442D7,
+    0xDA8A0600,
+    0xA96F30BC,
+    0x163138AA,
+    0xE38DEE4D,
+    0xB0FB0E4E,
+)
+SM3_T_0_15 = 0x79CC4519
+SM3_T_16_63 = 0x7A879D8A
+
+
+class SM2Ciphertext(Sequence):
+    _fields = [
+        ("x", Integer),
+        ("y", Integer),
+        ("hash", OctetString),
+        ("ciphertext", OctetString),
+    ]
 
 
 def register_sm2_curve() -> None:
@@ -227,6 +249,247 @@ def validate_key_pair(private_key: bytes, public_key: bytes) -> None:
         raise ValueError("private key and public key do not match")
 
 
+def rotate_left(value: int, bits: int) -> int:
+    bits %= 32
+    return ((value << bits) | (value >> (32 - bits))) & 0xFFFFFFFF
+
+
+def sm3_p0(value: int) -> int:
+    return value ^ rotate_left(value, 9) ^ rotate_left(value, 17)
+
+
+def sm3_p1(value: int) -> int:
+    return value ^ rotate_left(value, 15) ^ rotate_left(value, 23)
+
+
+def sm3_hash(data: bytes) -> bytes:
+    bit_len = len(data) * 8
+    padded = bytearray(data)
+    padded.append(0x80)
+    while len(padded) % 64 != 56:
+        padded.append(0)
+    padded.extend(bit_len.to_bytes(8, "big"))
+
+    state = list(SM3_IV)
+    for offset in range(0, len(padded), 64):
+        block = padded[offset : offset + 64]
+        words = [
+            int.from_bytes(block[index : index + 4], "big")
+            for index in range(0, 64, 4)
+        ]
+        for index in range(16, 68):
+            words.append(
+                (
+                    sm3_p1(
+                        words[index - 16]
+                        ^ words[index - 9]
+                        ^ rotate_left(words[index - 3], 15)
+                    )
+                    ^ rotate_left(words[index - 13], 7)
+                    ^ words[index - 6]
+                )
+                & 0xFFFFFFFF
+            )
+        mixed_words = [words[index] ^ words[index + 4] for index in range(64)]
+
+        a, b, c, d, e, f, g, h = state
+        for index in range(64):
+            if index < 16:
+                ff = a ^ b ^ c
+                gg = e ^ f ^ g
+                constant = SM3_T_0_15
+            else:
+                ff = (a & b) | (a & c) | (b & c)
+                gg = (e & f) | ((~e) & g)
+                constant = SM3_T_16_63
+
+            ss1 = rotate_left(
+                (rotate_left(a, 12) + e + rotate_left(constant, index)) & 0xFFFFFFFF,
+                7,
+            )
+            ss2 = ss1 ^ rotate_left(a, 12)
+            tt1 = (ff + d + ss2 + mixed_words[index]) & 0xFFFFFFFF
+            tt2 = (gg + h + ss1 + words[index]) & 0xFFFFFFFF
+            d = c
+            c = rotate_left(b, 9)
+            b = a
+            a = tt1
+            h = g
+            g = rotate_left(f, 19)
+            f = e
+            e = sm3_p0(tt2)
+
+        state = [
+            state[0] ^ a,
+            state[1] ^ b,
+            state[2] ^ c,
+            state[3] ^ d,
+            state[4] ^ e,
+            state[5] ^ f,
+            state[6] ^ g,
+            state[7] ^ h,
+        ]
+
+    return b"".join(value.to_bytes(4, "big") for value in state)
+
+
+def sm3_kdf(shared: bytes, key_length: int) -> bytes:
+    output = bytearray()
+    counter = 1
+    while len(output) < key_length:
+        output.extend(sm3_hash(shared + counter.to_bytes(4, "big")))
+        counter += 1
+    return bytes(output[:key_length])
+
+
+def xor_bytes(left: bytes, right: bytes) -> bytes:
+    return bytes(left_byte ^ right_byte for left_byte, right_byte in zip(left, right))
+
+
+def point_to_shared_bytes(point: tuple[int, int]) -> bytes:
+    x, y = point
+    return x.to_bytes(PRIVATE_KEY_BYTES, "big") + y.to_bytes(PRIVATE_KEY_BYTES, "big")
+
+
+def sm2_encrypt(plaintext: bytes, public_key: bytes) -> tuple[tuple[int, int], bytes, bytes]:
+    public_point = decode_public_key_point(public_key)
+    if not is_point_on_curve(public_point):
+        raise ValueError("public key point is not on the SM2 curve")
+
+    while True:
+        nonce = secrets.randbelow(SM2_N - 1) + 1
+        c1_point = scalar_multiply(nonce, SM2_G)
+        shared_point = scalar_multiply(nonce, public_point)
+        if c1_point is None or shared_point is None:
+            continue
+
+        shared = point_to_shared_bytes(shared_point)
+        mask = sm3_kdf(shared, len(plaintext))
+        if any(mask):
+            break
+
+    c2 = xor_bytes(plaintext, mask)
+    x2 = shared[:PRIVATE_KEY_BYTES]
+    y2 = shared[PRIVATE_KEY_BYTES:]
+    c3 = sm3_hash(x2 + plaintext + y2)
+    return c1_point, c3, c2
+
+
+def sm2_decrypt(private_key: bytes, ciphertext: bytes, ciphertext_format: str) -> bytes:
+    c1_point, c3, c2 = parse_ciphertext(ciphertext, ciphertext_format)
+    if not is_point_on_curve(c1_point):
+        raise ValueError("ciphertext C1 point is not on the SM2 curve")
+
+    private_value = int.from_bytes(private_key, "big")
+    shared_point = scalar_multiply(private_value, c1_point)
+    if shared_point is None:
+        raise ValueError("invalid SM2 ciphertext")
+
+    shared = point_to_shared_bytes(shared_point)
+    mask = sm3_kdf(shared, len(c2))
+    if not any(mask):
+        raise ValueError("invalid SM2 ciphertext KDF output")
+
+    plaintext = xor_bytes(c2, mask)
+    x2 = shared[:PRIVATE_KEY_BYTES]
+    y2 = shared[PRIVATE_KEY_BYTES:]
+    expected_c3 = sm3_hash(x2 + plaintext + y2)
+    if expected_c3 != c3:
+        raise ValueError("SM2 ciphertext integrity check failed")
+    return plaintext
+
+
+def encode_ciphertext(
+    c1_point: tuple[int, int],
+    c3: bytes,
+    c2: bytes,
+    ciphertext_format: str,
+) -> bytes:
+    if ciphertext_format == "openssl-der":
+        x, y = c1_point
+        return SM2Ciphertext(
+            {
+                "x": x,
+                "y": y,
+                "hash": c3,
+                "ciphertext": c2,
+            }
+        ).dump()
+
+    c1 = encode_public_key(c1_point)
+    if ciphertext_format == "c1c3c2":
+        return c1 + c3 + c2
+    if ciphertext_format == "c1c2c3":
+        return c1 + c2 + c3
+    raise ValueError(f"unsupported ciphertext format: {ciphertext_format}")
+
+
+def parse_ciphertext(
+    ciphertext: bytes,
+    ciphertext_format: str,
+) -> tuple[tuple[int, int], bytes, bytes]:
+    if ciphertext_format == "openssl-der":
+        try:
+            parsed = SM2Ciphertext.load(ciphertext)
+            c1_point = (parsed["x"].native, parsed["y"].native)
+            c3 = parsed["hash"].native
+            c2 = parsed["ciphertext"].native
+            return c1_point, c3, c2
+        except (ValueError, TypeError) as exc:
+            raise ValueError("ciphertext is not valid OpenSSL SM2 DER") from exc
+
+    if len(ciphertext) < PUBLIC_KEY_BYTES + PRIVATE_KEY_BYTES:
+        raise ValueError("ciphertext is too short")
+
+    c1 = ciphertext[:PUBLIC_KEY_BYTES]
+    if c1[0] != 0x04:
+        raise ValueError("raw ciphertext C1 must start with 04")
+    c1_point = decode_public_key_point(c1)
+
+    if ciphertext_format == "c1c3c2":
+        c3 = ciphertext[PUBLIC_KEY_BYTES : PUBLIC_KEY_BYTES + PRIVATE_KEY_BYTES]
+        c2 = ciphertext[PUBLIC_KEY_BYTES + PRIVATE_KEY_BYTES :]
+        return c1_point, c3, c2
+    if ciphertext_format == "c1c2c3":
+        c2 = ciphertext[PUBLIC_KEY_BYTES:-PRIVATE_KEY_BYTES]
+        c3 = ciphertext[-PRIVATE_KEY_BYTES:]
+        return c1_point, c3, c2
+    raise ValueError(f"unsupported ciphertext format: {ciphertext_format}")
+
+
+def private_key_from_pem_file(path: Path) -> bytes:
+    type_name, _, der = pem.unarmor(path.read_bytes())
+    if isinstance(type_name, bytes):
+        type_name = type_name.decode("ascii")
+    if type_name == "PRIVATE KEY":
+        register_sm2_curve()
+        private_info = keys.PrivateKeyInfo.load(der)
+        ec_private_key = private_info["private_key"].parsed
+    elif type_name == "EC PRIVATE KEY":
+        register_sm2_curve()
+        ec_private_key = keys.ECPrivateKey.load(der)
+    else:
+        raise ValueError(f"{path} is not a PRIVATE KEY or EC PRIVATE KEY PEM")
+
+    private_value = ec_private_key["private_key"].native
+    return private_value.to_bytes(PRIVATE_KEY_BYTES, "big")
+
+
+def public_key_from_pem_file(path: Path) -> bytes:
+    type_name, _, der = pem.unarmor(path.read_bytes())
+    if isinstance(type_name, bytes):
+        type_name = type_name.decode("ascii")
+    if type_name != "PUBLIC KEY":
+        raise ValueError(f"{path} is not a PUBLIC KEY PEM")
+    public_info = keys.PublicKeyInfo.load(der)
+    public_key = public_info["public_key"].native
+    if len(public_key) != PUBLIC_KEY_BYTES or public_key[0] != 0x04:
+        raise ValueError(f"{path} does not contain an uncompressed SM2 public key")
+    if not is_public_key_on_curve(public_key):
+        raise ValueError(f"{path} public key point is not on the SM2 curve")
+    return public_key
+
+
 def der_to_pem(der: bytes, label: str) -> str:
     body = base64.encodebytes(der).decode("ascii")
     return f"-----BEGIN {label}-----\n{body}-----END {label}-----\n"
@@ -292,10 +555,25 @@ def write_text(path: Path, text: str) -> None:
     path.write_text(text, encoding="ascii")
 
 
+def write_bytes(path: Path, data: bytes) -> None:
+    path.write_bytes(data)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="sm2-key-pem",
-        description="Generate SM2 keys or convert raw SM2 keys from hex/base64 to PEM.",
+        description="Generate/convert SM2 keys and encrypt/decrypt SM2 ciphertext.",
+    )
+    operation = parser.add_mutually_exclusive_group()
+    operation.add_argument(
+        "--encrypt",
+        action="store_true",
+        help="Encrypt input data with an SM2 public key.",
+    )
+    operation.add_argument(
+        "--decrypt",
+        action="store_true",
+        help="Decrypt input data with an SM2 private key.",
     )
     parser.add_argument(
         "--generate",
@@ -304,6 +582,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--private-key", "--priv", help="Raw SM2 private key.")
     parser.add_argument("--public-key", "--pub", help="Raw SM2 public key.")
+    parser.add_argument("--private-key-pem", help="Path to an SM2 private key PEM.")
+    parser.add_argument("--public-key-pem", help="Path to an SM2 public key PEM.")
+    parser.add_argument(
+        "--in",
+        dest="input_path",
+        help="Input file for --encrypt or --decrypt.",
+    )
+    parser.add_argument(
+        "--out",
+        dest="output_path",
+        help="Output file for --encrypt or --decrypt.",
+    )
+    parser.add_argument(
+        "--ciphertext-format",
+        choices=("openssl-der", "c1c3c2", "c1c2c3"),
+        default="openssl-der",
+        help="SM2 ciphertext format. Default: openssl-der",
+    )
     parser.add_argument(
         "--private-input-format",
         choices=("auto", "hex", "base64"),
@@ -355,8 +651,57 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    if args.encrypt or args.decrypt:
+        if args.generate:
+            parser.error("--generate cannot be combined with --encrypt or --decrypt")
+        if not args.input_path or not args.output_path:
+            parser.error("--encrypt and --decrypt require --in and --out")
+
+        try:
+            input_data = Path(args.input_path).read_bytes()
+            if args.encrypt:
+                if bool(args.public_key) == bool(args.public_key_pem):
+                    parser.error("--encrypt requires exactly one of --public-key or --public-key-pem")
+                public_key = (
+                    public_key_from_pem_file(Path(args.public_key_pem))
+                    if args.public_key_pem
+                    else parse_public_key(args.public_key, args.public_input_format)
+                )
+                c1_point, c3, c2 = sm2_encrypt(input_data, public_key)
+                output_data = encode_ciphertext(
+                    c1_point,
+                    c3,
+                    c2,
+                    args.ciphertext_format,
+                )
+            else:
+                if bool(args.private_key) == bool(args.private_key_pem):
+                    parser.error(
+                        "--decrypt requires exactly one of --private-key or --private-key-pem"
+                    )
+                private_key = (
+                    private_key_from_pem_file(Path(args.private_key_pem))
+                    if args.private_key_pem
+                    else parse_private_key(args.private_key, args.private_input_format)
+                )
+                output_data = sm2_decrypt(
+                    private_key,
+                    input_data,
+                    args.ciphertext_format,
+                )
+        except OSError as exc:
+            parser.exit(2, f"sm2-key-pem: error: {exc}\n")
+        except ValueError as exc:
+            parser.exit(2, f"sm2-key-pem: error: {exc}\n")
+
+        write_bytes(Path(args.output_path), output_data)
+        print(f"wrote {args.output_path}")
+        return 0
+
     if args.generate and (args.private_key or args.public_key):
         parser.error("--generate cannot be combined with --private-key or --public-key")
+    if args.private_key_pem or args.public_key_pem:
+        parser.error("--private-key-pem and --public-key-pem are only used with encryption")
     if not args.generate and not args.private_key and not args.public_key:
         parser.error("provide --private-key, --public-key, or both")
 
