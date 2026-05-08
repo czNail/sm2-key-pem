@@ -389,6 +389,38 @@ def test_cli_encrypts_and_decrypts_generated_sm2_key_pair(tmp_path: Path) -> Non
     assert decrypted.read_bytes() == message
 
 
+def test_gm_sm2_converts_base64_raw_key_to_sec1_ec_private_key(tmp_path: Path) -> None:
+    private_key = tmp_path / "sm2.ec.key.pem"
+    public_key = tmp_path / "sm2.pub.pem"
+
+    result = run_command(
+        [
+            sys.executable,
+            str(SM2_CLI),
+            "--private-input-format",
+            "base64",
+            "--public-input-format",
+            "base64",
+            "--private-pem-format",
+            "sec1",
+            "--private-key",
+            "ERERERERERERERERERERERERERERERERERERERERERE=",
+            "--public-key",
+            "BIUmEfdErwRWidz79MBDdzDS0t4zKrfw/AJ2nF+riolDfZOE8Zq4gu1miiiTbbkkdap5rvhpDuNvb7d8abm1cfg=",
+            "--private-out",
+            str(private_key),
+            "--public-out",
+            str(public_key),
+        ]
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert private_key.read_text(encoding="ascii").startswith(
+        "-----BEGIN EC PRIVATE KEY-----"
+    )
+    assert public_key.read_text(encoding="ascii").startswith("-----BEGIN PUBLIC KEY-----")
+
+
 def test_generated_sm2_key_pair_encrypts_and_decrypts_with_openssl(
     tmp_path: Path,
 ) -> None:

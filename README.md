@@ -55,6 +55,26 @@ Convert an existing raw key pair to PEM:
 SM2 public key input may be hex/base64 `04 + x + y`, or raw `x + y`; the `04`
 prefix is added automatically for raw `x + y`.
 
+Convert base64 raw keys to SEC1 `EC PRIVATE KEY` PEM:
+
+```bash
+./gm-sm2 \
+  --private-input-format base64 \
+  --public-input-format base64 \
+  --private-pem-format sec1 \
+  --private-key ERERERERERERERERERERERERERERERERERERERERERE= \
+  --public-key BIUmEfdErwRWidz79MBDdzDS0t4zKrfw/AJ2nF+riolDfZOE8Zq4gu1miiiTbbkkdap5rvhpDuNvb7d8abm1cfg= \
+  --private-out sm2.ec.key.pem
+```
+
+This writes:
+
+```text
+-----BEGIN EC PRIVATE KEY-----
+...
+-----END EC PRIVATE KEY-----
+```
+
 Encrypt with an SM2 public key PEM:
 
 ```bash

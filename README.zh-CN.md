@@ -53,6 +53,26 @@ pip install -r requirements-dev.txt
 SM2 公钥可以是 hex/base64 编码的 `04 + x + y`，也可以是裸 `x + y`；
 如果传入裸 `x + y`，工具会自动补 `04` 前缀。
 
+将 base64 裸密钥转换成 SEC1 `EC PRIVATE KEY` PEM：
+
+```bash
+./gm-sm2 \
+  --private-input-format base64 \
+  --public-input-format base64 \
+  --private-pem-format sec1 \
+  --private-key ERERERERERERERERERERERERERERERERERERERERERE= \
+  --public-key BIUmEfdErwRWidz79MBDdzDS0t4zKrfw/AJ2nF+riolDfZOE8Zq4gu1miiiTbbkkdap5rvhpDuNvb7d8abm1cfg= \
+  --private-out sm2.ec.key.pem
+```
+
+输出的私钥文件头是：
+
+```text
+-----BEGIN EC PRIVATE KEY-----
+...
+-----END EC PRIVATE KEY-----
+```
+
 使用 SM2 公钥 PEM 加密：
 
 ```bash
