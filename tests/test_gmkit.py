@@ -11,11 +11,14 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CLI = ROOT / "sm2-key-pem"
+SM2_CLI = ROOT / "gm-sm2"
+SM3_CLI = ROOT / "gm-sm3"
+SM4_CLI = ROOT / "gm-sm4"
+CORE = ROOT / "gmcrypto_core.py"
 
 
 def load_cli_module() -> object:
-    loader = importlib.machinery.SourceFileLoader("sm2_key_pem", str(CLI))
+    loader = importlib.machinery.SourceFileLoader("gmcrypto_core", str(CORE))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     assert spec is not None
     module = importlib.util.module_from_spec(spec)
@@ -43,12 +46,146 @@ def require_openssl_sm2() -> str:
 
 
 def test_sm3_known_vector() -> None:
-    sm2_key_pem = load_cli_module()
+    gmcrypto_core = load_cli_module()
     assert (
-        sm2_key_pem.sm3_hash(b"abc").hex()
+        gmcrypto_core.sm3_hash(b"abc").hex()
         == "66c7f0f462eeedd9d1f2d46bdc10e4e2"
         "4167c4875cf2f7a2297da02b8f4ba8e0"
     )
+
+
+def test_gm_sm3_cli_known_vector(tmp_path: Path) -> None:
+    data = tmp_path / "abc.txt"
+    digest = tmp_path / "abc.sm3"
+    data.write_bytes(b"abc")
+
+    result = run_command(
+        [
+            sys.executable,
+            str(SM3_CLI),
+            "--in",
+            str(data),
+            "--out",
+            str(digest),
+        ]
+    )
+    assert result.returncode == 0, result.stderr
+    assert (
+        digest.read_text(encoding="ascii").strip()
+        == "66c7f0f462eeedd9d1f2d46bdc10e4e2"
+        "4167c4875cf2f7a2297da02b8f4ba8e0"
+    )
+
+
+def test_sm4_known_vector() -> None:
+    gmcrypto_core = load_cli_module()
+    key = bytes.fromhex("0123456789abcdeffedcba9876543210")
+    plaintext = bytes.fromhex("0123456789abcdeffedcba9876543210")
+    ciphertext = bytes.fromhex("681edf34d206965e86b3e94f536e4246")
+    assert gmcrypto_core.sm4_encrypt_block(plaintext, key) == ciphertext
+    assert gmcrypto_core.sm4_decrypt_block(ciphertext, key) == plaintext
+
+
+def test_gm_sm4_cli_known_vector(tmp_path: Path) -> None:
+    plaintext = tmp_path / "plain.hex"
+    ciphertext = tmp_path / "cipher.hex"
+    decrypted = tmp_path / "decrypted.hex"
+    key = "0123456789abcdeffedcba9876543210"
+    plaintext.write_text("0123456789abcdeffedcba9876543210\n", encoding="ascii")
+
+    encrypted = run_command(
+        [
+            sys.executable,
+            str(SM4_CLI),
+            "--encrypt",
+            "--mode",
+            "ecb",
+            "--padding",
+            "none",
+            "--key",
+            key,
+            "--in",
+            str(plaintext),
+            "--out",
+            str(ciphertext),
+            "--input-format",
+            "hex",
+            "--output-format",
+            "hex",
+        ]
+    )
+    assert encrypted.returncode == 0, encrypted.stderr
+    assert ciphertext.read_text(encoding="ascii").strip() == "681edf34d206965e86b3e94f536e4246"
+
+    decrypted_result = run_command(
+        [
+            sys.executable,
+            str(SM4_CLI),
+            "--decrypt",
+            "--mode",
+            "ecb",
+            "--padding",
+            "none",
+            "--key",
+            key,
+            "--in",
+            str(ciphertext),
+            "--out",
+            str(decrypted),
+            "--input-format",
+            "hex",
+            "--output-format",
+            "hex",
+        ]
+    )
+    assert decrypted_result.returncode == 0, decrypted_result.stderr
+    assert decrypted.read_text(encoding="ascii").strip() == "0123456789abcdeffedcba9876543210"
+
+
+def test_gm_sm4_cli_cbc_round_trip(tmp_path: Path) -> None:
+    plaintext = tmp_path / "plain.txt"
+    ciphertext = tmp_path / "cipher.bin"
+    decrypted = tmp_path / "decrypted.txt"
+    plaintext.write_bytes(b"gm-sm4 cbc regression")
+
+    args = [
+        "--mode",
+        "cbc",
+        "--key",
+        "0123456789abcdeffedcba9876543210",
+        "--iv",
+        "00000000000000000000000000000000",
+    ]
+
+    encrypted = run_command(
+        [
+            sys.executable,
+            str(SM4_CLI),
+            "--encrypt",
+            *args,
+            "--in",
+            str(plaintext),
+            "--out",
+            str(ciphertext),
+        ]
+    )
+    assert encrypted.returncode == 0, encrypted.stderr
+    assert ciphertext.read_bytes() != plaintext.read_bytes()
+
+    decrypted_result = run_command(
+        [
+            sys.executable,
+            str(SM4_CLI),
+            "--decrypt",
+            *args,
+            "--in",
+            str(ciphertext),
+            "--out",
+            str(decrypted),
+        ]
+    )
+    assert decrypted_result.returncode == 0, decrypted_result.stderr
+    assert decrypted.read_bytes() == plaintext.read_bytes()
 
 
 def test_cli_encrypts_and_decrypts_generated_sm2_key_pair(tmp_path: Path) -> None:
@@ -61,7 +198,7 @@ def test_cli_encrypts_and_decrypts_generated_sm2_key_pair(tmp_path: Path) -> Non
     generated = run_command(
         [
             sys.executable,
-            str(CLI),
+            str(SM2_CLI),
             "--generate",
             "--private-out",
             str(private_key),
@@ -77,7 +214,7 @@ def test_cli_encrypts_and_decrypts_generated_sm2_key_pair(tmp_path: Path) -> Non
     encrypted = run_command(
         [
             sys.executable,
-            str(CLI),
+            str(SM2_CLI),
             "--encrypt",
             "--public-key-pem",
             str(public_key),
@@ -93,7 +230,7 @@ def test_cli_encrypts_and_decrypts_generated_sm2_key_pair(tmp_path: Path) -> Non
     decrypted_result = run_command(
         [
             sys.executable,
-            str(CLI),
+            str(SM2_CLI),
             "--decrypt",
             "--private-key-pem",
             str(private_key),
@@ -120,7 +257,7 @@ def test_generated_sm2_key_pair_encrypts_and_decrypts_with_openssl(
     generated = run_command(
         [
             sys.executable,
-            str(CLI),
+            str(SM2_CLI),
             "--generate",
             "--private-out",
             str(private_key),
@@ -182,7 +319,7 @@ def test_cli_sm2_ciphertext_interoperates_with_openssl(tmp_path: Path) -> None:
     generated = run_command(
         [
             sys.executable,
-            str(CLI),
+            str(SM2_CLI),
             "--generate",
             "--private-out",
             str(private_key),
@@ -198,7 +335,7 @@ def test_cli_sm2_ciphertext_interoperates_with_openssl(tmp_path: Path) -> None:
     cli_encrypted = run_command(
         [
             sys.executable,
-            str(CLI),
+            str(SM2_CLI),
             "--encrypt",
             "--public-key-pem",
             str(public_key),
@@ -245,7 +382,7 @@ def test_cli_sm2_ciphertext_interoperates_with_openssl(tmp_path: Path) -> None:
     cli_decrypted_result = run_command(
         [
             sys.executable,
-            str(CLI),
+            str(SM2_CLI),
             "--decrypt",
             "--private-key-pem",
             str(private_key),

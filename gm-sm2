@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+"""GMKit SM2 CLI."""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import sys
+from pathlib import Path
+
+from gmcrypto_core import (
+    encode_ciphertext,
+    generate_sm2_key_pair,
+    parse_private_key,
+    parse_public_key,
+    private_key_from_pem_file,
+    private_key_to_pkcs8_pem,
+    private_key_to_sec1_pem,
+    public_key_from_pem_file,
+    public_key_to_pem,
+    sm2_decrypt,
+    sm2_encrypt,
+    validate_key_pair,
+    write_bytes,
+    write_text,
+)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="gm-sm2",
+        description="Generate/convert SM2 keys and encrypt/decrypt SM2 ciphertext.",
+    )
+    operation = parser.add_mutually_exclusive_group()
+    operation.add_argument("--encrypt", action="store_true", help="Encrypt input data.")
+    operation.add_argument("--decrypt", action="store_true", help="Decrypt input data.")
+    parser.add_argument(
+        "--generate",
+        action="store_true",
+        help="Generate a random SM2 key pair without calling OpenSSL.",
+    )
+    parser.add_argument("--private-key", "--priv", help="Raw SM2 private key.")
+    parser.add_argument("--public-key", "--pub", help="Raw SM2 public key.")
+    parser.add_argument("--private-key-pem", help="Path to an SM2 private key PEM.")
+    parser.add_argument("--public-key-pem", help="Path to an SM2 public key PEM.")
+    parser.add_argument("--in", dest="input_path", help="Input file for encryption/decryption.")
+    parser.add_argument("--out", dest="output_path", help="Output file for encryption/decryption.")
+    parser.add_argument(
+        "--ciphertext-format",
+        choices=("openssl-der", "c1c3c2", "c1c2c3"),
+        default="openssl-der",
+        help="SM2 ciphertext format. Default: openssl-der",
+    )
+    parser.add_argument(
+        "--private-input-format",
+        choices=("auto", "hex", "base64"),
+        default="auto",
+        help="Private key input encoding. Default: auto",
+    )
+    parser.add_argument(
+        "--public-input-format",
+        choices=("auto", "hex", "base64"),
+        default="auto",
+        help="Public key input encoding. Default: auto",
+    )
+    parser.add_argument(
+        "--private-pem-format",
+        choices=("pkcs8", "sec1", "both"),
+        default="pkcs8",
+        help="Private key PEM format. Default: pkcs8",
+    )
+    parser.add_argument(
+        "--private-out",
+        default="sm2.key.pem",
+        help="Output path for private key PEM. Default: sm2.key.pem",
+    )
+    parser.add_argument(
+        "--sec1-private-out",
+        default="sm2.ec.key.pem",
+        help="Output path for SEC1 private key PEM when --private-pem-format=both.",
+    )
+    parser.add_argument(
+        "--public-out",
+        default="sm2.pub.pem",
+        help="Output path for public key PEM. Default: sm2.pub.pem",
+    )
+    parser.add_argument("--print", action="store_true", help="Print generated PEM.")
+    parser.add_argument(
+        "--print-raw",
+        action="store_true",
+        help="Print raw key hex/base64 values. This may reveal private keys.",
+    )
+    return parser
+
+
+def run_crypt(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    if args.generate:
+        parser.error("--generate cannot be combined with --encrypt or --decrypt")
+    if not args.input_path or not args.output_path:
+        parser.error("--encrypt and --decrypt require --in and --out")
+
+    try:
+        input_data = Path(args.input_path).read_bytes()
+        if args.encrypt:
+            if bool(args.public_key) == bool(args.public_key_pem):
+                parser.error("--encrypt requires exactly one of --public-key or --public-key-pem")
+            public_key = (
+                public_key_from_pem_file(Path(args.public_key_pem))
+                if args.public_key_pem
+                else parse_public_key(args.public_key, args.public_input_format)
+            )
+            c1_point, c3, c2 = sm2_encrypt(input_data, public_key)
+            output_data = encode_ciphertext(c1_point, c3, c2, args.ciphertext_format)
+        else:
+            if bool(args.private_key) == bool(args.private_key_pem):
+                parser.error(
+                    "--decrypt requires exactly one of --private-key or --private-key-pem"
+                )
+            private_key = (
+                private_key_from_pem_file(Path(args.private_key_pem))
+                if args.private_key_pem
+                else parse_private_key(args.private_key, args.private_input_format)
+            )
+            output_data = sm2_decrypt(private_key, input_data, args.ciphertext_format)
+    except OSError as exc:
+        parser.exit(2, f"gm-sm2: error: {exc}\n")
+    except ValueError as exc:
+        parser.exit(2, f"gm-sm2: error: {exc}\n")
+
+    write_bytes(Path(args.output_path), output_data)
+    print(f"wrote {args.output_path}")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if args.encrypt or args.decrypt:
+        return run_crypt(args, parser)
+
+    if args.generate and (args.private_key or args.public_key):
+        parser.error("--generate cannot be combined with --private-key or --public-key")
+    if args.private_key_pem or args.public_key_pem:
+        parser.error("--private-key-pem and --public-key-pem are only used with encryption")
+    if not args.generate and not args.private_key and not args.public_key:
+        parser.error("provide --generate, --private-key, --public-key, --encrypt, or --decrypt")
+
+    try:
+        if args.generate:
+            private_key, public_key = generate_sm2_key_pair()
+        else:
+            private_key = (
+                parse_private_key(args.private_key, args.private_input_format)
+                if args.private_key
+                else None
+            )
+            public_key = (
+                parse_public_key(args.public_key, args.public_input_format)
+                if args.public_key
+                else None
+            )
+            if private_key is not None and public_key is not None:
+                validate_key_pair(private_key, public_key)
+    except ValueError as exc:
+        parser.exit(2, f"gm-sm2: error: {exc}\n")
+
+    generated: list[tuple[Path, str]] = []
+    if private_key is not None:
+        if args.private_pem_format in ("pkcs8", "both"):
+            generated.append(
+                (Path(args.private_out), private_key_to_pkcs8_pem(private_key, public_key))
+            )
+        if args.private_pem_format == "sec1":
+            generated.append(
+                (Path(args.private_out), private_key_to_sec1_pem(private_key, public_key))
+            )
+        if args.private_pem_format == "both":
+            generated.append(
+                (
+                    Path(args.sec1_private_out),
+                    private_key_to_sec1_pem(private_key, public_key),
+                )
+            )
+
+    if public_key is not None:
+        generated.append((Path(args.public_out), public_key_to_pem(public_key)))
+
+    for path, pem_text in generated:
+        write_text(path, pem_text)
+        print(f"wrote {path}")
+        if args.print:
+            print(pem_text, end="" if pem_text.endswith("\n") else "\n")
+
+    if args.print_raw:
+        if private_key is not None:
+            print(f"private_key_hex={private_key.hex()}")
+            print(f"private_key_base64={base64.b64encode(private_key).decode('ascii')}")
+        if public_key is not None:
+            print(f"public_key_hex={public_key.hex()}")
+            print(f"public_key_base64={base64.b64encode(public_key).decode('ascii')}")
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

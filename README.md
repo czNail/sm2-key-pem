@@ -1,17 +1,86 @@
-# sm2-key-pem
+# GMKit
 
-An SM2-focused command-line toolbox for key generation, PEM wrapping, key
-format conversion, and SM2 encryption/decryption. It does not require a
-high-version OpenSSL installation for its built-in SM2 operations.
+GMKit is a lightweight command-line toolkit for Chinese commercial cryptography
+workflows. It currently provides separate tools for SM2, SM3, and SM4:
+
+- `gm-sm2`: SM2 key generation, PEM wrapping/conversion, encryption, and decryption
+- `gm-sm3`: SM3 digest calculation
+- `gm-sm4`: SM4 encryption and decryption
 
 [中文文档](README.zh-CN.md)
 
-This tool is useful when you need to generate an SM2 key pair locally, encrypt
-or decrypt SM2 ciphertext, or convert raw keys returned by an online SM2
-generator, for example:
+The tools are designed for interoperability work, local testing, and small
+automation scripts. SM2 key generation and SM2 encryption/decryption do not
+require a high-version OpenSSL installation. OpenSSL is only used by regression
+tests when available.
 
-- public key: base64 or hex encoded `04 + x + y`
-- private key: base64 or hex encoded 32-byte scalar
+## Install
+
+```bash
+pip install -r requirements.txt
+```
+
+For development and tests:
+
+```bash
+pip install -r requirements-dev.txt
+```
+
+## SM2 Tool
+
+Generate a random SM2 key pair:
+
+```bash
+./gm-sm2 --generate
+```
+
+Default output files:
+
+- private key: `sm2.key.pem`
+- public key: `sm2.pub.pem`
+
+Print raw generated key values as hex/base64:
+
+```bash
+./gm-sm2 --generate --print-raw
+```
+
+Convert an existing raw key pair to PEM:
+
+```bash
+./gm-sm2 \
+  --private-key 1111111111111111111111111111111111111111111111111111111111111111 \
+  --public-key BIUmEfdErwRWidz79MBDdzDS0t4zKrfw/AJ2nF+riolDfZOE8Zq4gu1miiiTbbkkdap5rvhpDuNvb7d8abm1cfg=
+```
+
+SM2 public key input may be hex/base64 `04 + x + y`, or raw `x + y`; the `04`
+prefix is added automatically for raw `x + y`.
+
+Encrypt with an SM2 public key PEM:
+
+```bash
+./gm-sm2 \
+  --encrypt \
+  --public-key-pem sm2.pub.pem \
+  --in plain.txt \
+  --out cipher.der
+```
+
+Decrypt with an SM2 private key PEM:
+
+```bash
+./gm-sm2 \
+  --decrypt \
+  --private-key-pem sm2.key.pem \
+  --in cipher.der \
+  --out decrypted.txt
+```
+
+SM2 ciphertext formats:
+
+- `openssl-der`: OpenSSL-compatible ASN.1 DER, default
+- `c1c3c2`: raw `04+x+y || C3 || C2`
+- `c1c2c3`: raw `04+x+y || C2 || C3`
 
 The generated PEM files include the SM2 curve OID:
 
@@ -22,220 +91,104 @@ The generated PEM files include the SM2 curve OID:
 The built-in SM2 curve parameters follow
 [RFC 8998 curveSM2](https://www.rfc-editor.org/rfc/rfc8998#section-3.2).
 
-## Product Scope
+## SM3 Tool
 
-Current release:
-
-- SM2 key pair generation
-- SM2 raw key to PEM conversion
-- SM2 PKCS#8 and SEC1 private key PEM output
-- SM2 public key PEM output
-- SM2 encryption/decryption
-- OpenSSL-compatible SM2 ciphertext by default
-
-Roadmap:
-
-- SM3 digest CLI
-- SM4 encryption/decryption CLI
-- More packaging options, such as `pipx` and PyPI
-
-## Install
+Calculate an SM3 digest for a file:
 
 ```bash
-pip install -r requirements.txt
+./gm-sm3 --in message.txt
 ```
 
-If your Python environment is externally managed, create a virtual environment
-first or install `asn1crypto` in the Python environment used to run this tool.
-
-## Generate a Random Key Pair
-
-Generate a random SM2 key pair and write PKCS#8 private key PEM plus public key
-PEM:
+Write the digest to a file:
 
 ```bash
-./sm2-key-pem --generate
+./gm-sm3 --in message.txt --out message.sm3
 ```
 
-Default output files:
-
-- private key: `sm2.key.pem`
-- public key: `sm2.pub.pem`
-
-Print the raw generated key values as hex/base64:
+Output formats:
 
 ```bash
-./sm2-key-pem --generate --print-raw
+./gm-sm3 --in message.txt --format hex
+./gm-sm3 --in message.txt --format base64
+./gm-sm3 --in message.txt --format binary --out message.sm3.bin
 ```
 
-`--print-raw` prints the private key. Use it only when you really need to copy
-the raw private scalar somewhere.
+If `--in` is omitted, `gm-sm3` reads from stdin.
 
-## Convert Existing Raw Keys
+## SM4 Tool
 
-Convert an existing private/public key pair to PEM:
+Generate a random SM4 key and IV:
 
 ```bash
-./sm2-key-pem \
-  --private-key 1111111111111111111111111111111111111111111111111111111111111111 \
-  --public-key BIUmEfdErwRWidz79MBDdzDS0t4zKrfw/AJ2nF+riolDfZOE8Zq4gu1miiiTbbkkdap5rvhpDuNvb7d8abm1cfg=
+./gm-sm4 --generate-key
+./gm-sm4 --generate-iv
 ```
 
-The private key is written as PKCS#8 by default:
-
-```text
------BEGIN PRIVATE KEY-----
-...
------END PRIVATE KEY-----
-```
-
-## Input Formats
-
-Input format is detected automatically by default.
-
-Public key input may be:
-
-- hex `04 + x + y`, 65 bytes
-- base64 of `04 + x + y`, 65 bytes
-- hex or base64 of raw `x + y`, 64 bytes; the `04` prefix is added automatically
-
-Private key input may be:
-
-- hex of a 32-byte private scalar
-- base64 of a 32-byte private scalar
-
-When both private and public keys are provided, the tool verifies that they
-belong to the same SM2 key pair.
-
-You can force an input format:
+Encrypt with SM4-CBC and PKCS#7 padding:
 
 ```bash
-./sm2-key-pem \
-  --private-input-format hex \
-  --public-input-format base64 \
-  --private-key 1111111111111111111111111111111111111111111111111111111111111111 \
-  --public-key BIUmEfdErwRWidz79MBDdzDS0t4zKrfw/AJ2nF+riolDfZOE8Zq4gu1miiiTbbkkdap5rvhpDuNvb7d8abm1cfg=
-```
-
-## Private Key PEM Formats
-
-Generate the default PKCS#8 PEM:
-
-```bash
-./sm2-key-pem \
-  --private-pem-format pkcs8 \
-  --private-key 1111111111111111111111111111111111111111111111111111111111111111
-```
-
-Generate SEC1 `EC PRIVATE KEY` PEM:
-
-```bash
-./sm2-key-pem \
-  --private-pem-format sec1 \
-  --private-key 1111111111111111111111111111111111111111111111111111111111111111
-```
-
-Generate both private key formats:
-
-```bash
-./sm2-key-pem \
-  --private-pem-format both \
-  --private-key 1111111111111111111111111111111111111111111111111111111111111111
-```
-
-When `both` is used:
-
-- PKCS#8 output: `sm2.key.pem`
-- SEC1 output: `sm2.ec.key.pem`
-
-## Custom Output Paths
-
-```bash
-./sm2-key-pem \
-  --private-key 1111111111111111111111111111111111111111111111111111111111111111 \
-  --public-key BIUmEfdErwRWidz79MBDdzDS0t4zKrfw/AJ2nF+riolDfZOE8Zq4gu1miiiTbbkkdap5rvhpDuNvb7d8abm1cfg= \
-  --private-out my-sm2.key.pem \
-  --public-out my-sm2.pub.pem
-```
-
-## Print PEM Content
-
-```bash
-./sm2-key-pem \
-  --private-key 1111111111111111111111111111111111111111111111111111111111111111 \
-  --public-key BIUmEfdErwRWidz79MBDdzDS0t4zKrfw/AJ2nF+riolDfZOE8Zq4gu1miiiTbbkkdap5rvhpDuNvb7d8abm1cfg= \
-  --print
-```
-
-## Encrypt and Decrypt
-
-Generate a key pair:
-
-```bash
-./sm2-key-pem --generate
-```
-
-Encrypt with the public key PEM:
-
-```bash
-./sm2-key-pem \
+./gm-sm4 \
   --encrypt \
-  --public-key-pem sm2.pub.pem \
+  --mode cbc \
+  --key 0123456789abcdeffedcba9876543210 \
+  --iv 00000000000000000000000000000000 \
   --in plain.txt \
-  --out cipher.der
+  --out cipher.bin
 ```
 
-Decrypt with the private key PEM:
+Decrypt:
 
 ```bash
-./sm2-key-pem \
+./gm-sm4 \
   --decrypt \
-  --private-key-pem sm2.key.pem \
-  --in cipher.der \
+  --mode cbc \
+  --key 0123456789abcdeffedcba9876543210 \
+  --iv 00000000000000000000000000000000 \
+  --in cipher.bin \
   --out decrypted.txt
 ```
 
-The default ciphertext format is `openssl-der`, which is compatible with
-`openssl pkeyutl`. Raw ciphertext formats are also available:
+Supported SM4 options:
 
-```bash
-./sm2-key-pem \
-  --encrypt \
-  --public-key-pem sm2.pub.pem \
-  --in plain.txt \
-  --out cipher.bin \
-  --ciphertext-format c1c3c2
-```
-
-Supported ciphertext formats:
-
-- `openssl-der`: OpenSSL-compatible ASN.1 DER, default
-- `c1c3c2`: raw `04+x+y || C3 || C2`
-- `c1c2c3`: raw `04+x+y || C2 || C3`
+- modes: `cbc`, `ecb`
+- padding: `pkcs7`, `none`
+- key/IV encoding: `auto`, `hex`, `base64`
+- input/output encoding: `raw`, `hex`, `base64`
 
 ## Tests
 
-Install development dependencies:
-
-```bash
-pip install -r requirements-dev.txt
-```
-
-Run the regression tests:
+Run all tests:
 
 ```bash
 pytest -q
 ```
 
-The test suite covers built-in SM2 encryption/decryption and OpenSSL
-interoperability. OpenSSL regression tests are skipped automatically when
-OpenSSL is missing or does not expose SM2 support.
+The test suite covers:
+
+- SM2 key generation and encryption/decryption
+- SM2/OpenSSL ciphertext interoperability when OpenSSL exposes SM2 support
+- SM3 known vector
+- SM4 known vector
+- SM4-CBC file round trip
+
+OpenSSL tests are skipped automatically when OpenSSL is missing or does not
+expose SM2 support.
+
+## Product Direction
+
+Current scope is a CLI-first GM toolkit for SM2, SM3, and SM4 interoperability.
+The next product steps are packaging and polish:
+
+- PyPI/pipx installation
+- stable command help and examples
+- more test vectors and cross-language fixtures
+- optional Python library API
 
 ## Security Note
 
 Do not commit real private keys. Generated `*.pem` and `*.key` files are ignored
 by this repository's `.gitignore`.
 
-The built-in Python SM2 implementation is intended for tooling and
+The built-in Python cryptographic implementations are intended for tooling and
 interoperability workflows. For high-assurance production systems, prefer an
 audited cryptographic provider or hardware-backed key storage.

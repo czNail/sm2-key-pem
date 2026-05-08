@@ -1,14 +1,11 @@
-#!/usr/bin/env python3
-"""Generate/convert SM2 keys and encrypt/decrypt SM2 ciphertext."""
+"""Core SM2, SM3, and SM4 primitives for the GMKit command-line tools."""
 
 from __future__ import annotations
 
-import argparse
 import base64
 import binascii
 import re
 import secrets
-import sys
 from pathlib import Path
 
 try:
@@ -67,6 +64,52 @@ SM3_IV = (
 )
 SM3_T_0_15 = 0x79CC4519
 SM3_T_16_63 = 0x7A879D8A
+SM4_BLOCK_SIZE = 16
+SM4_SBOX = (
+    0xD6, 0x90, 0xE9, 0xFE, 0xCC, 0xE1, 0x3D, 0xB7,
+    0x16, 0xB6, 0x14, 0xC2, 0x28, 0xFB, 0x2C, 0x05,
+    0x2B, 0x67, 0x9A, 0x76, 0x2A, 0xBE, 0x04, 0xC3,
+    0xAA, 0x44, 0x13, 0x26, 0x49, 0x86, 0x06, 0x99,
+    0x9C, 0x42, 0x50, 0xF4, 0x91, 0xEF, 0x98, 0x7A,
+    0x33, 0x54, 0x0B, 0x43, 0xED, 0xCF, 0xAC, 0x62,
+    0xE4, 0xB3, 0x1C, 0xA9, 0xC9, 0x08, 0xE8, 0x95,
+    0x80, 0xDF, 0x94, 0xFA, 0x75, 0x8F, 0x3F, 0xA6,
+    0x47, 0x07, 0xA7, 0xFC, 0xF3, 0x73, 0x17, 0xBA,
+    0x83, 0x59, 0x3C, 0x19, 0xE6, 0x85, 0x4F, 0xA8,
+    0x68, 0x6B, 0x81, 0xB2, 0x71, 0x64, 0xDA, 0x8B,
+    0xF8, 0xEB, 0x0F, 0x4B, 0x70, 0x56, 0x9D, 0x35,
+    0x1E, 0x24, 0x0E, 0x5E, 0x63, 0x58, 0xD1, 0xA2,
+    0x25, 0x22, 0x7C, 0x3B, 0x01, 0x21, 0x78, 0x87,
+    0xD4, 0x00, 0x46, 0x57, 0x9F, 0xD3, 0x27, 0x52,
+    0x4C, 0x36, 0x02, 0xE7, 0xA0, 0xC4, 0xC8, 0x9E,
+    0xEA, 0xBF, 0x8A, 0xD2, 0x40, 0xC7, 0x38, 0xB5,
+    0xA3, 0xF7, 0xF2, 0xCE, 0xF9, 0x61, 0x15, 0xA1,
+    0xE0, 0xAE, 0x5D, 0xA4, 0x9B, 0x34, 0x1A, 0x55,
+    0xAD, 0x93, 0x32, 0x30, 0xF5, 0x8C, 0xB1, 0xE3,
+    0x1D, 0xF6, 0xE2, 0x2E, 0x82, 0x66, 0xCA, 0x60,
+    0xC0, 0x29, 0x23, 0xAB, 0x0D, 0x53, 0x4E, 0x6F,
+    0xD5, 0xDB, 0x37, 0x45, 0xDE, 0xFD, 0x8E, 0x2F,
+    0x03, 0xFF, 0x6A, 0x72, 0x6D, 0x6C, 0x5B, 0x51,
+    0x8D, 0x1B, 0xAF, 0x92, 0xBB, 0xDD, 0xBC, 0x7F,
+    0x11, 0xD9, 0x5C, 0x41, 0x1F, 0x10, 0x5A, 0xD8,
+    0x0A, 0xC1, 0x31, 0x88, 0xA5, 0xCD, 0x7B, 0xBD,
+    0x2D, 0x74, 0xD0, 0x12, 0xB8, 0xE5, 0xB4, 0xB0,
+    0x89, 0x69, 0x97, 0x4A, 0x0C, 0x96, 0x77, 0x7E,
+    0x65, 0xB9, 0xF1, 0x09, 0xC5, 0x6E, 0xC6, 0x84,
+    0x18, 0xF0, 0x7D, 0xEC, 0x3A, 0xDC, 0x4D, 0x20,
+    0x79, 0xEE, 0x5F, 0x3E, 0xD7, 0xCB, 0x39, 0x48,
+)
+SM4_FK = (0xA3B1BAC6, 0x56AA3350, 0x677D9197, 0xB27022DC)
+SM4_CK = (
+    0x00070E15, 0x1C232A31, 0x383F464D, 0x545B6269,
+    0x70777E85, 0x8C939AA1, 0xA8AFB6BD, 0xC4CBD2D9,
+    0xE0E7EEF5, 0xFC030A11, 0x181F262D, 0x343B4249,
+    0x50575E65, 0x6C737A81, 0x888F969D, 0xA4ABB2B9,
+    0xC0C7CED5, 0xDCE3EAF1, 0xF8FF060D, 0x141B2229,
+    0x30373E45, 0x4C535A61, 0x686F767D, 0x848B9299,
+    0xA0A7AEB5, 0xBCC3CAD1, 0xD8DFE6ED, 0xF4FB0209,
+    0x10171E25, 0x2C333A41, 0x484F565D, 0x646B7279,
+)
 
 
 class SM2Ciphertext(Sequence):
@@ -342,6 +385,158 @@ def sm3_kdf(shared: bytes, key_length: int) -> bytes:
     return bytes(output[:key_length])
 
 
+def sm4_tau(value: int) -> int:
+    output = 0
+    for shift in (24, 16, 8, 0):
+        output = (output << 8) | SM4_SBOX[(value >> shift) & 0xFF]
+    return output
+
+
+def sm4_l(value: int) -> int:
+    return (
+        value
+        ^ rotate_left(value, 2)
+        ^ rotate_left(value, 10)
+        ^ rotate_left(value, 18)
+        ^ rotate_left(value, 24)
+    ) & 0xFFFFFFFF
+
+
+def sm4_l_key(value: int) -> int:
+    return (value ^ rotate_left(value, 13) ^ rotate_left(value, 23)) & 0xFFFFFFFF
+
+
+def sm4_round_keys(key: bytes) -> list[int]:
+    validate_length(key, "SM4 key", (SM4_BLOCK_SIZE,))
+    mk = [int.from_bytes(key[index : index + 4], "big") for index in range(0, 16, 4)]
+    key_words = [mk[index] ^ SM4_FK[index] for index in range(4)]
+    round_keys: list[int] = []
+    for index in range(32):
+        next_key = key_words[index] ^ sm4_l_key(
+            sm4_tau(key_words[index + 1] ^ key_words[index + 2] ^ key_words[index + 3] ^ SM4_CK[index])
+        )
+        round_keys.append(next_key)
+        key_words.append(next_key)
+    return round_keys
+
+
+def sm4_crypt_block(block: bytes, round_keys: list[int]) -> bytes:
+    validate_length(block, "SM4 block", (SM4_BLOCK_SIZE,))
+    words = [int.from_bytes(block[index : index + 4], "big") for index in range(0, 16, 4)]
+    for index in range(32):
+        next_word = words[index] ^ sm4_l(
+            sm4_tau(words[index + 1] ^ words[index + 2] ^ words[index + 3] ^ round_keys[index])
+        )
+        words.append(next_word)
+    return b"".join(words[index].to_bytes(4, "big") for index in (35, 34, 33, 32))
+
+
+def sm4_encrypt_block(block: bytes, key: bytes) -> bytes:
+    return sm4_crypt_block(block, sm4_round_keys(key))
+
+
+def sm4_decrypt_block(block: bytes, key: bytes) -> bytes:
+    return sm4_crypt_block(block, list(reversed(sm4_round_keys(key))))
+
+
+def pkcs7_pad(data: bytes, block_size: int = SM4_BLOCK_SIZE) -> bytes:
+    pad_len = block_size - (len(data) % block_size)
+    return data + bytes([pad_len]) * pad_len
+
+
+def pkcs7_unpad(data: bytes, block_size: int = SM4_BLOCK_SIZE) -> bytes:
+    if not data or len(data) % block_size:
+        raise ValueError("invalid PKCS#7 padded data length")
+    pad_len = data[-1]
+    if pad_len < 1 or pad_len > block_size:
+        raise ValueError("invalid PKCS#7 padding")
+    if data[-pad_len:] != bytes([pad_len]) * pad_len:
+        raise ValueError("invalid PKCS#7 padding")
+    return data[:-pad_len]
+
+
+def sm4_encrypt_ecb(plaintext: bytes, key: bytes, padding: str = "pkcs7") -> bytes:
+    if padding == "pkcs7":
+        plaintext = pkcs7_pad(plaintext)
+    elif padding == "none" and len(plaintext) % SM4_BLOCK_SIZE:
+        raise ValueError("SM4 plaintext length must be a multiple of 16 bytes without padding")
+    elif padding != "none":
+        raise ValueError(f"unsupported padding: {padding}")
+
+    round_keys = sm4_round_keys(key)
+    return b"".join(
+        sm4_crypt_block(plaintext[index : index + SM4_BLOCK_SIZE], round_keys)
+        for index in range(0, len(plaintext), SM4_BLOCK_SIZE)
+    )
+
+
+def sm4_decrypt_ecb(ciphertext: bytes, key: bytes, padding: str = "pkcs7") -> bytes:
+    if len(ciphertext) % SM4_BLOCK_SIZE:
+        raise ValueError("SM4 ciphertext length must be a multiple of 16 bytes")
+    round_keys = list(reversed(sm4_round_keys(key)))
+    plaintext = b"".join(
+        sm4_crypt_block(ciphertext[index : index + SM4_BLOCK_SIZE], round_keys)
+        for index in range(0, len(ciphertext), SM4_BLOCK_SIZE)
+    )
+    if padding == "pkcs7":
+        return pkcs7_unpad(plaintext)
+    if padding == "none":
+        return plaintext
+    raise ValueError(f"unsupported padding: {padding}")
+
+
+def sm4_encrypt_cbc(
+    plaintext: bytes,
+    key: bytes,
+    iv: bytes,
+    padding: str = "pkcs7",
+) -> bytes:
+    validate_length(iv, "SM4 IV", (SM4_BLOCK_SIZE,))
+    if padding == "pkcs7":
+        plaintext = pkcs7_pad(plaintext)
+    elif padding == "none" and len(plaintext) % SM4_BLOCK_SIZE:
+        raise ValueError("SM4 plaintext length must be a multiple of 16 bytes without padding")
+    elif padding != "none":
+        raise ValueError(f"unsupported padding: {padding}")
+
+    round_keys = sm4_round_keys(key)
+    previous = iv
+    output = bytearray()
+    for index in range(0, len(plaintext), SM4_BLOCK_SIZE):
+        block = xor_bytes(plaintext[index : index + SM4_BLOCK_SIZE], previous)
+        encrypted = sm4_crypt_block(block, round_keys)
+        output.extend(encrypted)
+        previous = encrypted
+    return bytes(output)
+
+
+def sm4_decrypt_cbc(
+    ciphertext: bytes,
+    key: bytes,
+    iv: bytes,
+    padding: str = "pkcs7",
+) -> bytes:
+    validate_length(iv, "SM4 IV", (SM4_BLOCK_SIZE,))
+    if len(ciphertext) % SM4_BLOCK_SIZE:
+        raise ValueError("SM4 ciphertext length must be a multiple of 16 bytes")
+
+    round_keys = list(reversed(sm4_round_keys(key)))
+    previous = iv
+    output = bytearray()
+    for index in range(0, len(ciphertext), SM4_BLOCK_SIZE):
+        block = ciphertext[index : index + SM4_BLOCK_SIZE]
+        decrypted = sm4_crypt_block(block, round_keys)
+        output.extend(xor_bytes(decrypted, previous))
+        previous = block
+
+    plaintext = bytes(output)
+    if padding == "pkcs7":
+        return pkcs7_unpad(plaintext)
+    if padding == "none":
+        return plaintext
+    raise ValueError(f"unsupported padding: {padding}")
+
+
 def xor_bytes(left: bytes, right: bytes) -> bytes:
     return bytes(left_byte ^ right_byte for left_byte, right_byte in zip(left, right))
 
@@ -557,211 +752,3 @@ def write_text(path: Path, text: str) -> None:
 
 def write_bytes(path: Path, data: bytes) -> None:
     path.write_bytes(data)
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="sm2-key-pem",
-        description="Generate/convert SM2 keys and encrypt/decrypt SM2 ciphertext.",
-    )
-    operation = parser.add_mutually_exclusive_group()
-    operation.add_argument(
-        "--encrypt",
-        action="store_true",
-        help="Encrypt input data with an SM2 public key.",
-    )
-    operation.add_argument(
-        "--decrypt",
-        action="store_true",
-        help="Decrypt input data with an SM2 private key.",
-    )
-    parser.add_argument(
-        "--generate",
-        action="store_true",
-        help="Generate a random SM2 key pair without calling OpenSSL.",
-    )
-    parser.add_argument("--private-key", "--priv", help="Raw SM2 private key.")
-    parser.add_argument("--public-key", "--pub", help="Raw SM2 public key.")
-    parser.add_argument("--private-key-pem", help="Path to an SM2 private key PEM.")
-    parser.add_argument("--public-key-pem", help="Path to an SM2 public key PEM.")
-    parser.add_argument(
-        "--in",
-        dest="input_path",
-        help="Input file for --encrypt or --decrypt.",
-    )
-    parser.add_argument(
-        "--out",
-        dest="output_path",
-        help="Output file for --encrypt or --decrypt.",
-    )
-    parser.add_argument(
-        "--ciphertext-format",
-        choices=("openssl-der", "c1c3c2", "c1c2c3"),
-        default="openssl-der",
-        help="SM2 ciphertext format. Default: openssl-der",
-    )
-    parser.add_argument(
-        "--private-input-format",
-        choices=("auto", "hex", "base64"),
-        default="auto",
-        help="Private key input encoding. Default: auto",
-    )
-    parser.add_argument(
-        "--public-input-format",
-        choices=("auto", "hex", "base64"),
-        default="auto",
-        help="Public key input encoding. Default: auto",
-    )
-    parser.add_argument(
-        "--private-pem-format",
-        choices=("pkcs8", "sec1", "both"),
-        default="pkcs8",
-        help="Private key PEM format. Default: pkcs8",
-    )
-    parser.add_argument(
-        "--private-out",
-        default="sm2.key.pem",
-        help="Output path for the private key PEM. Default: sm2.key.pem",
-    )
-    parser.add_argument(
-        "--sec1-private-out",
-        default="sm2.ec.key.pem",
-        help="Output path for SEC1 private key PEM when --private-pem-format=both. "
-        "Default: sm2.ec.key.pem",
-    )
-    parser.add_argument(
-        "--public-out",
-        default="sm2.pub.pem",
-        help="Output path for PUBLIC KEY PEM. Default: sm2.pub.pem",
-    )
-    parser.add_argument(
-        "--print",
-        action="store_true",
-        help="Print generated PEM content to stdout.",
-    )
-    parser.add_argument(
-        "--print-raw",
-        action="store_true",
-        help="Print raw key hex/base64 values to stdout. This may reveal private keys.",
-    )
-    return parser
-
-
-def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
-
-    if args.encrypt or args.decrypt:
-        if args.generate:
-            parser.error("--generate cannot be combined with --encrypt or --decrypt")
-        if not args.input_path or not args.output_path:
-            parser.error("--encrypt and --decrypt require --in and --out")
-
-        try:
-            input_data = Path(args.input_path).read_bytes()
-            if args.encrypt:
-                if bool(args.public_key) == bool(args.public_key_pem):
-                    parser.error("--encrypt requires exactly one of --public-key or --public-key-pem")
-                public_key = (
-                    public_key_from_pem_file(Path(args.public_key_pem))
-                    if args.public_key_pem
-                    else parse_public_key(args.public_key, args.public_input_format)
-                )
-                c1_point, c3, c2 = sm2_encrypt(input_data, public_key)
-                output_data = encode_ciphertext(
-                    c1_point,
-                    c3,
-                    c2,
-                    args.ciphertext_format,
-                )
-            else:
-                if bool(args.private_key) == bool(args.private_key_pem):
-                    parser.error(
-                        "--decrypt requires exactly one of --private-key or --private-key-pem"
-                    )
-                private_key = (
-                    private_key_from_pem_file(Path(args.private_key_pem))
-                    if args.private_key_pem
-                    else parse_private_key(args.private_key, args.private_input_format)
-                )
-                output_data = sm2_decrypt(
-                    private_key,
-                    input_data,
-                    args.ciphertext_format,
-                )
-        except OSError as exc:
-            parser.exit(2, f"sm2-key-pem: error: {exc}\n")
-        except ValueError as exc:
-            parser.exit(2, f"sm2-key-pem: error: {exc}\n")
-
-        write_bytes(Path(args.output_path), output_data)
-        print(f"wrote {args.output_path}")
-        return 0
-
-    if args.generate and (args.private_key or args.public_key):
-        parser.error("--generate cannot be combined with --private-key or --public-key")
-    if args.private_key_pem or args.public_key_pem:
-        parser.error("--private-key-pem and --public-key-pem are only used with encryption")
-    if not args.generate and not args.private_key and not args.public_key:
-        parser.error("provide --private-key, --public-key, or both")
-
-    try:
-        if args.generate:
-            private_key, public_key = generate_sm2_key_pair()
-        else:
-            private_key = (
-                parse_private_key(args.private_key, args.private_input_format)
-                if args.private_key
-                else None
-            )
-            public_key = (
-                parse_public_key(args.public_key, args.public_input_format)
-                if args.public_key
-                else None
-            )
-            if private_key is not None and public_key is not None:
-                validate_key_pair(private_key, public_key)
-    except ValueError as exc:
-        parser.exit(2, f"sm2-key-pem: error: {exc}\n")
-
-    generated: list[tuple[Path, str]] = []
-
-    if private_key is not None:
-        if args.private_pem_format in ("pkcs8", "both"):
-            generated.append(
-                (Path(args.private_out), private_key_to_pkcs8_pem(private_key, public_key))
-            )
-        if args.private_pem_format == "sec1":
-            generated.append(
-                (Path(args.private_out), private_key_to_sec1_pem(private_key, public_key))
-            )
-        if args.private_pem_format == "both":
-            generated.append(
-                (
-                    Path(args.sec1_private_out),
-                    private_key_to_sec1_pem(private_key, public_key),
-                )
-            )
-
-    if public_key is not None:
-        generated.append((Path(args.public_out), public_key_to_pem(public_key)))
-
-    for path, pem in generated:
-        write_text(path, pem)
-        print(f"wrote {path}")
-        if args.print:
-            print(pem, end="" if pem.endswith("\n") else "\n")
-
-    if args.print_raw:
-        if private_key is not None:
-            print(f"private_key_hex={private_key.hex()}")
-            print(f"private_key_base64={base64.b64encode(private_key).decode('ascii')}")
-        if public_key is not None:
-            print(f"public_key_hex={public_key.hex()}")
-            print(f"public_key_base64={base64.b64encode(public_key).decode('ascii')}")
-
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

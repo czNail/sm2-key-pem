@@ -1,0 +1,149 @@
+#!/usr/bin/env python3
+"""GMKit SM4 CLI."""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import secrets
+import sys
+from pathlib import Path
+
+from gmcrypto_core import (
+    decode_base64,
+    decode_hex,
+    decode_raw_key,
+    sm4_decrypt_cbc,
+    sm4_decrypt_ecb,
+    sm4_encrypt_cbc,
+    sm4_encrypt_ecb,
+)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="gm-sm4", description="Encrypt/decrypt data with SM4.")
+    operation = parser.add_mutually_exclusive_group(required=True)
+    operation.add_argument("--encrypt", action="store_true", help="Encrypt input data.")
+    operation.add_argument("--decrypt", action="store_true", help="Decrypt input data.")
+    operation.add_argument("--generate-key", action="store_true", help="Generate a random SM4 key.")
+    operation.add_argument("--generate-iv", action="store_true", help="Generate a random SM4 IV.")
+    parser.add_argument("--key", help="SM4 key in hex or base64.")
+    parser.add_argument("--iv", help="SM4 CBC IV in hex or base64.")
+    parser.add_argument(
+        "--key-format",
+        choices=("auto", "hex", "base64"),
+        default="auto",
+        help="Key encoding. Default: auto",
+    )
+    parser.add_argument(
+        "--iv-format",
+        choices=("auto", "hex", "base64"),
+        default="auto",
+        help="IV encoding. Default: auto",
+    )
+    parser.add_argument("--in", dest="input_path", help="Input file.")
+    parser.add_argument("--out", dest="output_path", help="Output file.")
+    parser.add_argument(
+        "--mode",
+        choices=("cbc", "ecb"),
+        default="cbc",
+        help="SM4 block mode. Default: cbc",
+    )
+    parser.add_argument(
+        "--padding",
+        choices=("pkcs7", "none"),
+        default="pkcs7",
+        help="Padding mode. Default: pkcs7",
+    )
+    parser.add_argument(
+        "--input-format",
+        choices=("raw", "hex", "base64"),
+        default="raw",
+        help="Cipher/plain input encoding. Default: raw",
+    )
+    parser.add_argument(
+        "--output-format",
+        choices=("raw", "hex", "base64"),
+        default="raw",
+        help="Cipher/plain output encoding. Default: raw",
+    )
+    return parser
+
+
+def decode_payload(data: bytes, input_format: str) -> bytes:
+    if input_format == "raw":
+        return data
+    text = data.decode("ascii")
+    if input_format == "hex":
+        return decode_hex(text, "input")
+    if input_format == "base64":
+        return decode_base64(text, "input")
+    raise ValueError(f"unsupported input format: {input_format}")
+
+
+def encode_payload(data: bytes, output_format: str) -> bytes:
+    if output_format == "raw":
+        return data
+    if output_format == "hex":
+        return data.hex().encode("ascii") + b"\n"
+    if output_format == "base64":
+        return base64.b64encode(data) + b"\n"
+    raise ValueError(f"unsupported output format: {output_format}")
+
+
+def require_key(args: argparse.Namespace, parser: argparse.ArgumentParser) -> bytes:
+    if not args.key:
+        parser.error("--encrypt and --decrypt require --key")
+    return decode_raw_key(args.key, "SM4 key", (16,), args.key_format)
+
+
+def require_iv(args: argparse.Namespace, parser: argparse.ArgumentParser) -> bytes | None:
+    if args.mode == "ecb":
+        return None
+    if not args.iv:
+        parser.error("--mode cbc requires --iv")
+    return decode_raw_key(args.iv, "SM4 IV", (16,), args.iv_format)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if args.generate_key or args.generate_iv:
+        value = secrets.token_bytes(16)
+        print(value.hex())
+        return 0
+
+    if not args.input_path or not args.output_path:
+        parser.error("--encrypt and --decrypt require --in and --out")
+
+    try:
+        key = require_key(args, parser)
+        iv = require_iv(args, parser)
+        data = decode_payload(Path(args.input_path).read_bytes(), args.input_format)
+
+        if args.encrypt:
+            output = (
+                sm4_encrypt_cbc(data, key, iv, args.padding)
+                if args.mode == "cbc"
+                else sm4_encrypt_ecb(data, key, args.padding)
+            )
+        else:
+            output = (
+                sm4_decrypt_cbc(data, key, iv, args.padding)
+                if args.mode == "cbc"
+                else sm4_decrypt_ecb(data, key, args.padding)
+            )
+
+        Path(args.output_path).write_bytes(encode_payload(output, args.output_format))
+        print(f"wrote {args.output_path}")
+    except OSError as exc:
+        parser.exit(2, f"gm-sm4: error: {exc}\n")
+    except ValueError as exc:
+        parser.exit(2, f"gm-sm4: error: {exc}\n")
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
