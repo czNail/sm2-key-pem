@@ -197,15 +197,16 @@ def test_gm_sm4_cli_known_vector(tmp_path: Path) -> None:
     assert decrypted.read_text(encoding="ascii").strip() == "0123456789abcdeffedcba9876543210"
 
 
-def test_gm_sm4_cli_cbc_round_trip(tmp_path: Path) -> None:
+@pytest.mark.parametrize("mode", ("cbc", "ctr", "ofb", "cfb"))
+def test_gm_sm4_cli_round_trip(tmp_path: Path, mode: str) -> None:
     plaintext = tmp_path / "plain.txt"
     ciphertext = tmp_path / "cipher.bin"
     decrypted = tmp_path / "decrypted.txt"
-    plaintext.write_bytes(b"gm-sm4 cbc regression")
+    plaintext.write_bytes(f"gm-sm4 {mode} regression".encode())
 
     args = [
         "--mode",
-        "cbc",
+        mode,
         "--key",
         "0123456789abcdeffedcba9876543210",
         "--iv",
@@ -243,16 +244,17 @@ def test_gm_sm4_cli_cbc_round_trip(tmp_path: Path) -> None:
     assert decrypted.read_bytes() == plaintext.read_bytes()
 
 
-def test_gm_sm4_cli_interoperates_with_openssl_cbc(tmp_path: Path) -> None:
-    openssl = require_openssl_cipher("sm4-cbc")
+@pytest.mark.parametrize("mode", ("cbc", "ctr", "ofb", "cfb"))
+def test_gm_sm4_cli_interoperates_with_openssl(tmp_path: Path, mode: str) -> None:
+    openssl = require_openssl_cipher(f"sm4-{mode}")
     key = "0123456789abcdeffedcba9876543210"
     iv = "00000000000000000000000000000000"
     plaintext = tmp_path / "plain.txt"
-    gmkit_ciphertext = tmp_path / "gmkit-cipher.bin"
-    openssl_ciphertext = tmp_path / "openssl-cipher.bin"
+    gmkit_ciphertext = tmp_path / f"gmkit-{mode}-cipher.bin"
+    openssl_ciphertext = tmp_path / f"openssl-{mode}-cipher.bin"
     gmkit_decrypted = tmp_path / "gmkit-decrypted.txt"
     openssl_decrypted = tmp_path / "openssl-decrypted.txt"
-    message = b"gm-sm4 openssl interoperability regression\n"
+    message = f"gm-sm4 {mode} openssl interoperability regression\n".encode()
     plaintext.write_bytes(message)
 
     gmkit_encrypted = run_command(
@@ -261,7 +263,7 @@ def test_gm_sm4_cli_interoperates_with_openssl_cbc(tmp_path: Path) -> None:
             str(SM4_CLI),
             "--encrypt",
             "--mode",
-            "cbc",
+            mode,
             "--key",
             key,
             "--iv",
@@ -278,7 +280,7 @@ def test_gm_sm4_cli_interoperates_with_openssl_cbc(tmp_path: Path) -> None:
         [
             openssl,
             "enc",
-            "-sm4-cbc",
+            f"-sm4-{mode}",
             "-d",
             "-K",
             key,
@@ -297,7 +299,7 @@ def test_gm_sm4_cli_interoperates_with_openssl_cbc(tmp_path: Path) -> None:
         [
             openssl,
             "enc",
-            "-sm4-cbc",
+            f"-sm4-{mode}",
             "-K",
             key,
             "-iv",
@@ -316,7 +318,7 @@ def test_gm_sm4_cli_interoperates_with_openssl_cbc(tmp_path: Path) -> None:
             str(SM4_CLI),
             "--decrypt",
             "--mode",
-            "cbc",
+            mode,
             "--key",
             key,
             "--iv",

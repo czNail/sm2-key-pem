@@ -14,9 +14,13 @@ from gmcrypto_core import (
     decode_hex,
     decode_raw_key,
     sm4_decrypt_cbc,
+    sm4_decrypt_cfb,
     sm4_decrypt_ecb,
     sm4_encrypt_cbc,
+    sm4_encrypt_cfb,
     sm4_encrypt_ecb,
+    sm4_crypt_ctr,
+    sm4_crypt_ofb,
 )
 
 
@@ -28,7 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
     operation.add_argument("--generate-key", action="store_true", help="Generate a random SM4 key.")
     operation.add_argument("--generate-iv", action="store_true", help="Generate a random SM4 IV.")
     parser.add_argument("--key", help="SM4 key in hex or base64.")
-    parser.add_argument("--iv", help="SM4 CBC IV in hex or base64.")
+    parser.add_argument("--iv", help="SM4 IV/counter in hex or base64.")
     parser.add_argument(
         "--key-format",
         choices=("auto", "hex", "base64"),
@@ -45,7 +49,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--out", dest="output_path", help="Output file.")
     parser.add_argument(
         "--mode",
-        choices=("cbc", "ecb"),
+        choices=("cbc", "ecb", "ctr", "ofb", "cfb"),
         default="cbc",
         help="SM4 block mode. Default: cbc",
     )
@@ -53,7 +57,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--padding",
         choices=("pkcs7", "none"),
         default="pkcs7",
-        help="Padding mode. Default: pkcs7",
+        help="Padding mode for CBC/ECB. Default: pkcs7",
     )
     parser.add_argument(
         "--input-format",
@@ -101,8 +105,28 @@ def require_iv(args: argparse.Namespace, parser: argparse.ArgumentParser) -> byt
     if args.mode == "ecb":
         return None
     if not args.iv:
-        parser.error("--mode cbc requires --iv")
-    return decode_raw_key(args.iv, "SM4 IV", (16,), args.iv_format)
+        parser.error(f"--mode {args.mode} requires --iv")
+    return decode_raw_key(args.iv, "SM4 IV/counter", (16,), args.iv_format)
+
+
+def crypt_sm4(data: bytes, args: argparse.Namespace, key: bytes, iv: bytes | None) -> bytes:
+    if args.mode == "cbc":
+        if args.encrypt:
+            return sm4_encrypt_cbc(data, key, iv, args.padding)
+        return sm4_decrypt_cbc(data, key, iv, args.padding)
+    if args.mode == "ecb":
+        if args.encrypt:
+            return sm4_encrypt_ecb(data, key, args.padding)
+        return sm4_decrypt_ecb(data, key, args.padding)
+    if args.mode == "ctr":
+        return sm4_crypt_ctr(data, key, iv)
+    if args.mode == "ofb":
+        return sm4_crypt_ofb(data, key, iv)
+    if args.mode == "cfb":
+        if args.encrypt:
+            return sm4_encrypt_cfb(data, key, iv)
+        return sm4_decrypt_cfb(data, key, iv)
+    raise ValueError(f"unsupported SM4 mode: {args.mode}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -122,18 +146,7 @@ def main(argv: list[str] | None = None) -> int:
         iv = require_iv(args, parser)
         data = decode_payload(Path(args.input_path).read_bytes(), args.input_format)
 
-        if args.encrypt:
-            output = (
-                sm4_encrypt_cbc(data, key, iv, args.padding)
-                if args.mode == "cbc"
-                else sm4_encrypt_ecb(data, key, args.padding)
-            )
-        else:
-            output = (
-                sm4_decrypt_cbc(data, key, iv, args.padding)
-                if args.mode == "cbc"
-                else sm4_decrypt_ecb(data, key, args.padding)
-            )
+        output = crypt_sm4(data, args, key, iv)
 
         Path(args.output_path).write_bytes(encode_payload(output, args.output_format))
         print(f"wrote {args.output_path}")

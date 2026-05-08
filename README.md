@@ -149,8 +149,8 @@ Decrypt:
 
 Supported SM4 options:
 
-- modes: `cbc`, `ecb`
-- padding: `pkcs7`, `none`
+- modes: `cbc`, `ecb`, `ctr`, `ofb`, `cfb`
+- padding for `cbc`/`ecb`: `pkcs7`, `none`
 - key/IV encoding: `auto`, `hex`, `base64`
 - input/output encoding: `raw`, `hex`, `base64`
 
@@ -169,8 +169,9 @@ The test suite covers:
 - SM3 known vector
 - SM3/OpenSSL digest interoperability when OpenSSL exposes SM3 support
 - SM4 known vector
-- SM4-CBC file round trip
-- SM4/OpenSSL-CBC ciphertext interoperability when OpenSSL exposes SM4 support
+- SM4 file round trips for CBC, CTR, OFB, and CFB
+- SM4/OpenSSL ciphertext interoperability for CBC, CTR, OFB, and CFB when
+  OpenSSL exposes SM4 support
 
 OpenSSL interoperability tests are skipped automatically when OpenSSL is missing
 or does not expose the relevant SM2, SM3, or SM4 support.

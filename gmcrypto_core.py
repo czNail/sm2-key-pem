@@ -537,6 +537,63 @@ def sm4_decrypt_cbc(
     raise ValueError(f"unsupported padding: {padding}")
 
 
+def increment_counter(counter: bytes) -> bytes:
+    value = (int.from_bytes(counter, "big") + 1) % (1 << (SM4_BLOCK_SIZE * 8))
+    return value.to_bytes(SM4_BLOCK_SIZE, "big")
+
+
+def sm4_crypt_ctr(data: bytes, key: bytes, iv: bytes) -> bytes:
+    validate_length(iv, "SM4 IV", (SM4_BLOCK_SIZE,))
+    round_keys = sm4_round_keys(key)
+    counter = iv
+    output = bytearray()
+    for index in range(0, len(data), SM4_BLOCK_SIZE):
+        block = data[index : index + SM4_BLOCK_SIZE]
+        keystream = sm4_crypt_block(counter, round_keys)
+        output.extend(xor_bytes(block, keystream[: len(block)]))
+        counter = increment_counter(counter)
+    return bytes(output)
+
+
+def sm4_crypt_ofb(data: bytes, key: bytes, iv: bytes) -> bytes:
+    validate_length(iv, "SM4 IV", (SM4_BLOCK_SIZE,))
+    round_keys = sm4_round_keys(key)
+    feedback = iv
+    output = bytearray()
+    for index in range(0, len(data), SM4_BLOCK_SIZE):
+        block = data[index : index + SM4_BLOCK_SIZE]
+        feedback = sm4_crypt_block(feedback, round_keys)
+        output.extend(xor_bytes(block, feedback[: len(block)]))
+    return bytes(output)
+
+
+def sm4_encrypt_cfb(plaintext: bytes, key: bytes, iv: bytes) -> bytes:
+    validate_length(iv, "SM4 IV", (SM4_BLOCK_SIZE,))
+    round_keys = sm4_round_keys(key)
+    feedback = iv
+    output = bytearray()
+    for index in range(0, len(plaintext), SM4_BLOCK_SIZE):
+        block = plaintext[index : index + SM4_BLOCK_SIZE]
+        keystream = sm4_crypt_block(feedback, round_keys)
+        encrypted = xor_bytes(block, keystream[: len(block)])
+        output.extend(encrypted)
+        feedback = encrypted if len(encrypted) == SM4_BLOCK_SIZE else feedback
+    return bytes(output)
+
+
+def sm4_decrypt_cfb(ciphertext: bytes, key: bytes, iv: bytes) -> bytes:
+    validate_length(iv, "SM4 IV", (SM4_BLOCK_SIZE,))
+    round_keys = sm4_round_keys(key)
+    feedback = iv
+    output = bytearray()
+    for index in range(0, len(ciphertext), SM4_BLOCK_SIZE):
+        block = ciphertext[index : index + SM4_BLOCK_SIZE]
+        keystream = sm4_crypt_block(feedback, round_keys)
+        output.extend(xor_bytes(block, keystream[: len(block)]))
+        feedback = block if len(block) == SM4_BLOCK_SIZE else feedback
+    return bytes(output)
+
+
 def xor_bytes(left: bytes, right: bytes) -> bytes:
     return bytes(left_byte ^ right_byte for left_byte, right_byte in zip(left, right))
 

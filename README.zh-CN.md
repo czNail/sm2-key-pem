@@ -147,8 +147,8 @@ SM2 密文格式：
 
 SM4 支持选项：
 
-- 模式：`cbc`、`ecb`
-- padding：`pkcs7`、`none`
+- 模式：`cbc`、`ecb`、`ctr`、`ofb`、`cfb`
+- `cbc`/`ecb` padding：`pkcs7`、`none`
 - key/IV 编码：`auto`、`hex`、`base64`
 - 输入/输出编码：`raw`、`hex`、`base64`
 
@@ -167,8 +167,8 @@ pytest -q
 - SM3 标准向量
 - OpenSSL 暴露 SM3 支持时的 SM3/OpenSSL 摘要互操作
 - SM4 标准向量
-- SM4-CBC 文件加解密往返
-- OpenSSL 暴露 SM4 支持时的 SM4/OpenSSL-CBC 密文互操作
+- SM4 CBC、CTR、OFB、CFB 文件加解密往返
+- OpenSSL 暴露 SM4 支持时的 SM4 CBC、CTR、OFB、CFB 密文互操作
 
 如果当前环境没有 OpenSSL，或者 OpenSSL 不暴露对应的 SM2、SM3、SM4 支持，
 OpenSSL 互操作测试会自动跳过。
