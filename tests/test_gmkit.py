@@ -45,6 +45,36 @@ def require_openssl_sm2() -> str:
     return openssl
 
 
+def require_openssl_digest(digest_name: str) -> str:
+    openssl = shutil.which("openssl")
+    if openssl is None:
+        pytest.skip("OpenSSL is not installed")
+
+    result = run_command([openssl, "list", "-digest-algorithms"])
+    if result.returncode != 0:
+        pytest.skip(f"cannot inspect OpenSSL digest algorithms: {result.stderr.strip()}")
+
+    if digest_name.lower() not in result.stdout.lower():
+        pytest.skip(f"OpenSSL does not expose {digest_name} digest support")
+
+    return openssl
+
+
+def require_openssl_cipher(cipher_name: str) -> str:
+    openssl = shutil.which("openssl")
+    if openssl is None:
+        pytest.skip("OpenSSL is not installed")
+
+    result = run_command([openssl, "list", "-cipher-algorithms"])
+    if result.returncode != 0:
+        pytest.skip(f"cannot inspect OpenSSL cipher algorithms: {result.stderr.strip()}")
+
+    if cipher_name.lower() not in result.stdout.lower():
+        pytest.skip(f"OpenSSL does not expose {cipher_name} cipher support")
+
+    return openssl
+
+
 def test_sm3_known_vector() -> None:
     gmcrypto_core = load_cli_module()
     assert (
@@ -75,6 +105,31 @@ def test_gm_sm3_cli_known_vector(tmp_path: Path) -> None:
         == "66c7f0f462eeedd9d1f2d46bdc10e4e2"
         "4167c4875cf2f7a2297da02b8f4ba8e0"
     )
+
+
+def test_gm_sm3_cli_interoperates_with_openssl(tmp_path: Path) -> None:
+    openssl = require_openssl_digest("sm3")
+    data = tmp_path / "message.txt"
+    gmkit_digest = tmp_path / "gmkit.sm3"
+    message = b"gm-sm3 openssl interoperability regression\n"
+    data.write_bytes(message)
+
+    gmkit_result = run_command(
+        [
+            sys.executable,
+            str(SM3_CLI),
+            "--in",
+            str(data),
+            "--out",
+            str(gmkit_digest),
+        ]
+    )
+    assert gmkit_result.returncode == 0, gmkit_result.stderr
+
+    openssl_result = run_command([openssl, "dgst", "-sm3", str(data)])
+    assert openssl_result.returncode == 0, openssl_result.stderr
+    openssl_digest = openssl_result.stdout.rsplit("=", 1)[1].strip()
+    assert gmkit_digest.read_text(encoding="ascii").strip() == openssl_digest
 
 
 def test_sm4_known_vector() -> None:
@@ -186,6 +241,94 @@ def test_gm_sm4_cli_cbc_round_trip(tmp_path: Path) -> None:
     )
     assert decrypted_result.returncode == 0, decrypted_result.stderr
     assert decrypted.read_bytes() == plaintext.read_bytes()
+
+
+def test_gm_sm4_cli_interoperates_with_openssl_cbc(tmp_path: Path) -> None:
+    openssl = require_openssl_cipher("sm4-cbc")
+    key = "0123456789abcdeffedcba9876543210"
+    iv = "00000000000000000000000000000000"
+    plaintext = tmp_path / "plain.txt"
+    gmkit_ciphertext = tmp_path / "gmkit-cipher.bin"
+    openssl_ciphertext = tmp_path / "openssl-cipher.bin"
+    gmkit_decrypted = tmp_path / "gmkit-decrypted.txt"
+    openssl_decrypted = tmp_path / "openssl-decrypted.txt"
+    message = b"gm-sm4 openssl interoperability regression\n"
+    plaintext.write_bytes(message)
+
+    gmkit_encrypted = run_command(
+        [
+            sys.executable,
+            str(SM4_CLI),
+            "--encrypt",
+            "--mode",
+            "cbc",
+            "--key",
+            key,
+            "--iv",
+            iv,
+            "--in",
+            str(plaintext),
+            "--out",
+            str(gmkit_ciphertext),
+        ]
+    )
+    assert gmkit_encrypted.returncode == 0, gmkit_encrypted.stderr
+
+    openssl_decrypted_result = run_command(
+        [
+            openssl,
+            "enc",
+            "-sm4-cbc",
+            "-d",
+            "-K",
+            key,
+            "-iv",
+            iv,
+            "-in",
+            str(gmkit_ciphertext),
+            "-out",
+            str(openssl_decrypted),
+        ]
+    )
+    assert openssl_decrypted_result.returncode == 0, openssl_decrypted_result.stderr
+    assert openssl_decrypted.read_bytes() == message
+
+    openssl_encrypted = run_command(
+        [
+            openssl,
+            "enc",
+            "-sm4-cbc",
+            "-K",
+            key,
+            "-iv",
+            iv,
+            "-in",
+            str(plaintext),
+            "-out",
+            str(openssl_ciphertext),
+        ]
+    )
+    assert openssl_encrypted.returncode == 0, openssl_encrypted.stderr
+
+    gmkit_decrypted_result = run_command(
+        [
+            sys.executable,
+            str(SM4_CLI),
+            "--decrypt",
+            "--mode",
+            "cbc",
+            "--key",
+            key,
+            "--iv",
+            iv,
+            "--in",
+            str(openssl_ciphertext),
+            "--out",
+            str(gmkit_decrypted),
+        ]
+    )
+    assert gmkit_decrypted_result.returncode == 0, gmkit_decrypted_result.stderr
+    assert gmkit_decrypted.read_bytes() == message
 
 
 def test_cli_encrypts_and_decrypts_generated_sm2_key_pair(tmp_path: Path) -> None:

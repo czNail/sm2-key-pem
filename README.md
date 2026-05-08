@@ -10,9 +10,8 @@ workflows. It currently provides separate tools for SM2, SM3, and SM4:
 [中文文档](README.zh-CN.md)
 
 The tools are designed for interoperability work, local testing, and small
-automation scripts. SM2 key generation and SM2 encryption/decryption do not
-require a high-version OpenSSL installation. OpenSSL is only used by regression
-tests when available.
+automation scripts. GMKit does not require OpenSSL at runtime; OpenSSL is only
+used by optional interoperability regression tests when available.
 
 ## Install
 
@@ -168,11 +167,13 @@ The test suite covers:
 - SM2 key generation and encryption/decryption
 - SM2/OpenSSL ciphertext interoperability when OpenSSL exposes SM2 support
 - SM3 known vector
+- SM3/OpenSSL digest interoperability when OpenSSL exposes SM3 support
 - SM4 known vector
 - SM4-CBC file round trip
+- SM4/OpenSSL-CBC ciphertext interoperability when OpenSSL exposes SM4 support
 
-OpenSSL tests are skipped automatically when OpenSSL is missing or does not
-expose SM2 support.
+OpenSSL interoperability tests are skipped automatically when OpenSSL is missing
+or does not expose the relevant SM2, SM3, or SM4 support.
 
 ## Product Direction
 
