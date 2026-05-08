@@ -259,3 +259,7 @@ by this repository's `.gitignore`.
 The built-in Python cryptographic implementations are intended for tooling and
 interoperability workflows. For high-assurance production systems, prefer an
 audited cryptographic provider or hardware-backed key storage.
+
+## License
+
+MIT License. See [LICENSE](LICENSE).
