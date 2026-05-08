@@ -23,6 +23,8 @@ SM2_CURVE_NAME = "sm2p256v1"
 PRIVATE_KEY_BYTES = 32
 PUBLIC_KEY_BYTES = 65
 RAW_PUBLIC_KEY_BYTES = 64
+SDF_ECCREF_MAX_LEN = 64
+SDF_SM2_BITS = 256
 SM2_P = int(
     "FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF00000000FFFFFFFFFFFFFFFF",
     16,
@@ -290,6 +292,36 @@ def validate_key_pair(private_key: bytes, public_key: bytes) -> None:
     public_point = scalar_multiply(private_value, SM2_G)
     if public_point is None or encode_public_key(public_point) != public_key:
         raise ValueError("private key and public key do not match")
+
+
+def left_pad_sdf_coordinate(value: bytes, label: str) -> bytes:
+    if len(value) > SDF_ECCREF_MAX_LEN:
+        raise ValueError(f"{label} is longer than {SDF_ECCREF_MAX_LEN} bytes")
+    return b"\x00" * (SDF_ECCREF_MAX_LEN - len(value)) + value
+
+
+def encode_sdf_bits(endian: str) -> bytes:
+    if endian not in ("little", "big"):
+        raise ValueError("SDF endian must be little or big")
+    return SDF_SM2_BITS.to_bytes(4, endian)
+
+
+def private_key_to_sdf(private_key: bytes, endian: str = "little") -> bytes:
+    validate_length(private_key, "private key", (PRIVATE_KEY_BYTES,))
+    return encode_sdf_bits(endian) + left_pad_sdf_coordinate(private_key, "private key")
+
+
+def public_key_to_sdf(public_key: bytes, endian: str = "little") -> bytes:
+    validate_length(public_key, "public key", (PUBLIC_KEY_BYTES,))
+    if public_key[0] != 0x04:
+        raise ValueError("public key must be an uncompressed EC point starting with 04")
+    x = public_key[1:33]
+    y = public_key[33:65]
+    return (
+        encode_sdf_bits(endian)
+        + left_pad_sdf_coordinate(x, "public key x")
+        + left_pad_sdf_coordinate(y, "public key y")
+    )
 
 
 def rotate_left(value: int, bits: int) -> int:

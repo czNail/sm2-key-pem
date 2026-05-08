@@ -55,6 +55,11 @@ Convert an existing raw key pair to PEM:
 SM2 public key input may be hex/base64 `04 + x + y`, or raw `x + y`; the `04`
 prefix is added automatically for raw `x + y`.
 
+PEM remains useful for OpenSSL, Java/BouncyCastle, certificates, and general
+cryptography libraries. HSMs that ask for the key format defined by the
+cryptography device application interface usually expect SDF/ECCref binary
+structures instead of PEM.
+
 Convert base64 raw keys to SEC1 `EC PRIVATE KEY` PEM:
 
 ```bash
@@ -73,6 +78,46 @@ This writes:
 -----BEGIN EC PRIVATE KEY-----
 ...
 -----END EC PRIVATE KEY-----
+```
+
+Export SDF/ECCref plaintext keys for HSM imports that follow the GM/T 0018/SDF
+interface structures:
+
+```bash
+./gm-sm2 \
+  --private-input-format base64 \
+  --public-input-format base64 \
+  --key-output-format sdf \
+  --private-key ERERERERERERERERERERERERERERERERERERERERERE= \
+  --public-key BIUmEfdErwRWidz79MBDdzDS0t4zKrfw/AJ2nF+riolDfZOE8Zq4gu1miiiTbbkkdap5rvhpDuNvb7d8abm1cfg= \
+  --sdf-private-out sm2.sdf.pri \
+  --sdf-public-out sm2.sdf.pub
+```
+
+Generate PEM and SDF together:
+
+```bash
+./gm-sm2 --generate --key-output-format both
+```
+
+SDF output files are binary:
+
+- `sm2.sdf.pri`: `ECCrefPrivateKey`, 68 bytes
+- `sm2.sdf.pub`: `ECCrefPublicKey`, 132 bytes
+
+Default layout:
+
+```text
+ECCrefPrivateKey = uint32 bits + 64-byte K
+ECCrefPublicKey  = uint32 bits + 64-byte x + 64-byte y
+bits             = 256, little-endian by default: 00 01 00 00
+K/x/y            = 32-byte leading zero padding + 32-byte SM2 value
+```
+
+If your device documentation explicitly requires big-endian `bits`, add:
+
+```bash
+--sdf-endian big
 ```
 
 Encrypt with an SM2 public key PEM:

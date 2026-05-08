@@ -421,6 +421,83 @@ def test_gm_sm2_converts_base64_raw_key_to_sec1_ec_private_key(tmp_path: Path) -
     assert public_key.read_text(encoding="ascii").startswith("-----BEGIN PUBLIC KEY-----")
 
 
+def test_gm_sm2_exports_base64_raw_key_to_sdf_eccref(tmp_path: Path) -> None:
+    private_key = tmp_path / "sm2.sdf.pri"
+    public_key = tmp_path / "sm2.sdf.pub"
+
+    result = run_command(
+        [
+            sys.executable,
+            str(SM2_CLI),
+            "--private-input-format",
+            "base64",
+            "--public-input-format",
+            "base64",
+            "--key-output-format",
+            "sdf",
+            "--private-key",
+            "ERERERERERERERERERERERERERERERERERERERERERE=",
+            "--public-key",
+            "BIUmEfdErwRWidz79MBDdzDS0t4zKrfw/AJ2nF+riolDfZOE8Zq4gu1miiiTbbkkdap5rvhpDuNvb7d8abm1cfg=",
+            "--sdf-private-out",
+            str(private_key),
+            "--sdf-public-out",
+            str(public_key),
+        ]
+    )
+
+    assert result.returncode == 0, result.stderr
+    private_data = private_key.read_bytes()
+    public_data = public_key.read_bytes()
+    public_raw = bytes.fromhex(
+        "04852611f744af045689dcfbf4c0437730d2d2de332ab7f0fc02769c5fab8a8943"
+        "7d9384f19ab882ed668a28936db92475aa79aef8690ee36f6fb77c69b9b571f8"
+    )
+
+    assert len(private_data) == 68
+    assert private_data[:4] == (256).to_bytes(4, "little")
+    assert private_data[4:36] == b"\x00" * 32
+    assert private_data[36:] == bytes.fromhex("11" * 32)
+
+    assert len(public_data) == 132
+    assert public_data[:4] == (256).to_bytes(4, "little")
+    assert public_data[4:36] == b"\x00" * 32
+    assert public_data[36:68] == public_raw[1:33]
+    assert public_data[68:100] == b"\x00" * 32
+    assert public_data[100:132] == public_raw[33:65]
+
+
+def test_gm_sm2_can_generate_pem_and_sdf_together(tmp_path: Path) -> None:
+    private_pem = tmp_path / "sm2.key.pem"
+    public_pem = tmp_path / "sm2.pub.pem"
+    private_sdf = tmp_path / "sm2.sdf.pri"
+    public_sdf = tmp_path / "sm2.sdf.pub"
+
+    result = run_command(
+        [
+            sys.executable,
+            str(SM2_CLI),
+            "--generate",
+            "--key-output-format",
+            "both",
+            "--private-out",
+            str(private_pem),
+            "--public-out",
+            str(public_pem),
+            "--sdf-private-out",
+            str(private_sdf),
+            "--sdf-public-out",
+            str(public_sdf),
+        ]
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert private_pem.read_text(encoding="ascii").startswith("-----BEGIN PRIVATE KEY-----")
+    assert public_pem.read_text(encoding="ascii").startswith("-----BEGIN PUBLIC KEY-----")
+    assert len(private_sdf.read_bytes()) == 68
+    assert len(public_sdf.read_bytes()) == 132
+
+
 def test_generated_sm2_key_pair_encrypts_and_decrypts_with_openssl(
     tmp_path: Path,
 ) -> None:

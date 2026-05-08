@@ -14,10 +14,12 @@ from gmcrypto_core import (
     parse_private_key,
     parse_public_key,
     private_key_from_pem_file,
+    private_key_to_sdf,
     private_key_to_pkcs8_pem,
     private_key_to_sec1_pem,
     public_key_from_pem_file,
     public_key_to_pem,
+    public_key_to_sdf,
     sm2_decrypt,
     sm2_encrypt,
     validate_key_pair,
@@ -64,6 +66,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Public key input encoding. Default: auto",
     )
     parser.add_argument(
+        "--key-output-format",
+        choices=("pem", "sdf", "both"),
+        default="pem",
+        help="Key output format. Default: pem",
+    )
+    parser.add_argument(
         "--private-pem-format",
         choices=("pkcs8", "sec1", "both"),
         default="pkcs8",
@@ -83,6 +91,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--public-out",
         default="sm2.pub.pem",
         help="Output path for public key PEM. Default: sm2.pub.pem",
+    )
+    parser.add_argument(
+        "--sdf-private-out",
+        default="sm2.sdf.pri",
+        help="Output path for SDF ECCrefPrivateKey binary. Default: sm2.sdf.pri",
+    )
+    parser.add_argument(
+        "--sdf-public-out",
+        default="sm2.sdf.pub",
+        help="Output path for SDF ECCrefPublicKey binary. Default: sm2.sdf.pub",
+    )
+    parser.add_argument(
+        "--sdf-endian",
+        choices=("little", "big"),
+        default="little",
+        help="Endian for the SDF unsigned int bits field. Default: little",
     )
     parser.add_argument("--print", action="store_true", help="Print generated PEM.")
     parser.add_argument(
@@ -165,32 +189,48 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         parser.exit(2, f"gm-sm2: error: {exc}\n")
 
-    generated: list[tuple[Path, str]] = []
-    if private_key is not None:
+    generated_text: list[tuple[Path, str]] = []
+    generated_binary: list[tuple[Path, bytes]] = []
+
+    if private_key is not None and args.key_output_format in ("pem", "both"):
         if args.private_pem_format in ("pkcs8", "both"):
-            generated.append(
+            generated_text.append(
                 (Path(args.private_out), private_key_to_pkcs8_pem(private_key, public_key))
             )
         if args.private_pem_format == "sec1":
-            generated.append(
+            generated_text.append(
                 (Path(args.private_out), private_key_to_sec1_pem(private_key, public_key))
             )
         if args.private_pem_format == "both":
-            generated.append(
+            generated_text.append(
                 (
                     Path(args.sec1_private_out),
                     private_key_to_sec1_pem(private_key, public_key),
                 )
             )
 
-    if public_key is not None:
-        generated.append((Path(args.public_out), public_key_to_pem(public_key)))
+    if public_key is not None and args.key_output_format in ("pem", "both"):
+        generated_text.append((Path(args.public_out), public_key_to_pem(public_key)))
 
-    for path, pem_text in generated:
+    if private_key is not None and args.key_output_format in ("sdf", "both"):
+        generated_binary.append(
+            (Path(args.sdf_private_out), private_key_to_sdf(private_key, args.sdf_endian))
+        )
+
+    if public_key is not None and args.key_output_format in ("sdf", "both"):
+        generated_binary.append(
+            (Path(args.sdf_public_out), public_key_to_sdf(public_key, args.sdf_endian))
+        )
+
+    for path, pem_text in generated_text:
         write_text(path, pem_text)
         print(f"wrote {path}")
         if args.print:
             print(pem_text, end="" if pem_text.endswith("\n") else "\n")
+
+    for path, key_data in generated_binary:
+        write_bytes(path, key_data)
+        print(f"wrote {path}")
 
     if args.print_raw:
         if private_key is not None:
